@@ -3,6 +3,7 @@ from pydantic import BaseModel
 import google.generativeai as genai
 import os
 from dotenv import load_dotenv
+from fastapi.middleware.cors import CORSMiddleware
 
 # Load biến môi trường từ file .env
 load_dotenv()
@@ -20,6 +21,14 @@ model = genai.GenerativeModel('gemini-1.5-flash')
 # Khởi tạo ứng dụng FastAPI
 app = FastAPI(title="Gemini Chatbot API")
 
+# <--  CẤU HÌNH CORS  -->
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Cho phép tất cả các origin (domain) gọi API
+    allow_credentials=True,
+    allow_methods=["*"],  # Cho phép tất cả các HTTP method (GET, POST, OPTIONS, v.v.)
+    allow_headers=["*"],  # Cho phép tất cả các headers
+)
 # Định nghĩa cấu trúc dữ liệu nhận vào từ Client (DTO)
 class ChatRequest(BaseModel):
     message: str
