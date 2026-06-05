@@ -5,6 +5,9 @@ import os
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 
+# Nhung ham thuat toan vua xu li tu file recommender.py
+from recommender import get_collaborative_recommendations
+
 # Load biến môi trường từ file .env
 load_dotenv()
 
@@ -14,9 +17,7 @@ if not api_key:
     raise ValueError("Chưa tìm thấy GEMINI_API_KEY trong file .env")
 
 genai.configure(api_key=api_key)
-
-# Khởi tạo model (dùng gemini-1.5-flash cho các tác vụ chat thông thường vì nó nhanh và rẻ)
-model = genai.GenerativeModel('gemini-1.5-flash')
+model = genai.GenerativeModel('gemini-3.1-flash-lite') 
 
 # Khởi tạo ứng dụng FastAPI
 app = FastAPI(title="Gemini Chatbot API")
@@ -24,20 +25,24 @@ app = FastAPI(title="Gemini Chatbot API")
 # <--  CẤU HÌNH CORS  -->
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Cho phép tất cả các origin (domain) gọi API
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # Cho phép tất cả các HTTP method (GET, POST, OPTIONS, v.v.)
-    allow_headers=["*"],  # Cho phép tất cả các headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
-# Định nghĩa cấu trúc dữ liệu nhận vào từ Client (DTO)
+
+# --- ENDPOINT KIỂM TRA SERVER ---
+@app.get("/")
+async def root():
+    return {"message": "FastAPI & Gemini Server is running!"}
+
+# --- ENDPOINT CHAT VỚI GEMINI ---
 class ChatRequest(BaseModel):
     message: str
 
-# Tạo Endpoint POST để nhận tin nhắn và trả về phản hồi
 @app.post("/api/chat")
 async def chat_with_gemini(request: ChatRequest):
     try:
-        # Gọi API tới Gemini
         response = model.generate_content(request.message)
         return {
             "status": "success",
@@ -46,7 +51,20 @@ async def chat_with_gemini(request: ChatRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# Endpoint kiểm tra sức khỏe của server
-@app.get("/")
-async def root():
-    return {"message": "FastAPI & Gemini Server is running!"}
+# --- ENDPOINT GỢI Ý SẢN PHẨM ---
+class RecommendRequest(BaseModel):
+    user_id: int
+    top_n: int = 3
+
+@app.post("/api/recommend")
+async def recommend_products(request: RecommendRequest):
+    try:
+        # Gọi hàm xử lý thuật toán từ file recommender.py
+        recommended_items = get_collaborative_recommendations(request.user_id, request.top_n)
+        return {
+            "status": "success",
+            "user_id": request.user_id,
+            "recommendations": recommended_items
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
