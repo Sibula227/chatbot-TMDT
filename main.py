@@ -7,6 +7,7 @@ import os
 import json
 import httpx
 from dotenv import load_dotenv
+from typing import Optional, List
 
 load_dotenv()
 
@@ -129,3 +130,19 @@ async def chat_with_gemini(request: ChatRequest, background_tasks: BackgroundTas
 @app.get("/")
 async def root():
     return {"message": "FastAPI & Gemini Server is running with Mock DB!"}
+
+@app.get("/api/recommend/{user_id}", response_model=List[int])
+def recommend_products(user_id: int, top_n: int = 5):
+    """
+    API endpoint nhận vào user_id và trả về danh sách mã sản phẩm (product_id) được gợi ý.
+    """
+    try:
+        recommendations = get_recommendations(user_id, top_n)
+        return recommendations
+    except Exception as e:
+        print(f"======== CHI TIẾT LỖI TỪ RECOMMENDATION ======== \n{str(e)}")
+        raise HTTPException(status_code=500, detail=f"Lỗi hệ thống tính toán: {str(e)}")
+
+@app.get("/")
+async def root():
+    return {"message": "FastAPI Server: Chatbot & Recommendation System is running!"}
