@@ -367,3 +367,25 @@ pip install -r requirements.txt
 - Noi dung thay doi: khong raise loi khi thieu `GEMINI_API_KEY` luc import/startup; neu chat Gemini thieu key thi tra 503; endpoint recommendation van co the chay; them `if __name__ == "__main__"` de chay bang `python main.py` tren port 8000.
 - Kiem tra: `python -m py_compile main.py recommendation.py` thanh cong.
 - Luu y: de backend tra san pham goi y khac rong, can chay chatbot FastAPI port 8000 va database MySQL co bang `product_specs`.
+
+---
+
+## Cap nhat 2026-07-08 - Chatbot chi dung san pham tu backend
+
+- Yeu cau: chatbot chi tra loi/goi y san pham co trong du lieu hien co va lay data thong qua backend, khong doc folder `chatbot-TMDT/data`.
+- File da sua: `main.py`.
+- Endpoint backend lien quan: `GET /api/products`.
+- Noi dung thay doi: bo catalog san pham nap cung luc startup; them `load_products_from_backend()` goi backend theo tung page `size=100`, co cache ngan; `/api/chat` loc san pham lien quan theo cau hoi roi chi dua danh sach JSON da loc vao Gemini; prompt cam tu them san pham ngoai JSON/backend.
+- Du lieu `data/`: khong sua va khong doc trong luong chat.
+- Kiem tra: `python -m py_compile main.py recommendation.py` thanh cong; backend `GET /api/products?size=1` tra `totalElements=216`; helper loc mau tra dung iPhone, tra rong voi Sony TV khong co.
+- Luu y: can backend chay truoc khi hoi san pham; co the cau hinh `SOPE_BACKEND_API_URL`, `SOPE_PRODUCTS_CACHE_TTL_SECONDS`, `SOPE_CHATBOT_MAX_PRODUCTS_FOR_PROMPT`.
+
+---
+
+## Cap nhat 2026-07-08 - Sua tim chip xu ly chatbot
+
+- Yeu cau: chatbot hoi iPhone 15 dung chip gi phai tra CPU Apple A16 Bionic; tim `Apple A16` khong can go day du `Apple A16 5 nhan` van co ket qua.
+- File da sua: `main.py`.
+- Noi dung thay doi: scoring tim tren toan bo `specs`; uu tien cac spec chip/CPU/GPU/RAM/pin/man hinh khi dua vao prompt; them field rieng `Chip xu ly`, `Chip do hoa`; loc dung model phrase nhu `iphone 15` de khong keo Xiaomi/realme co so 15 vao ket qua; prompt yeu cau dung `Chip xu ly` truoc khi hoi CPU.
+- Kiem tra: `python -m py_compile main.py recommendation.py` thanh cong; helper loc `may iphone 15 dung chip xu ly gi` chi tra iPhone 15/15 Plus va prompt co `Chip xu ly: Apple A16 Bionic`; `Apple A16` va `chip Apple A16` co ket qua.
+- Luu y: khong sua backend, vi backend da co spec CPU dung; loi nam o chatbot cat ngan/cham diem specs.
