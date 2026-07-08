@@ -75,10 +75,10 @@ product_catalog_str = load_product_data()
 # 2. CẤU HÌNH GEMINI API
 # ==========================================
 api_key = os.getenv("GEMINI_API_KEY")
-if not api_key:
-    raise ValueError("Chưa tìm thấy GEMINI_API_KEY trong file .env")
-
-genai.configure(api_key=api_key)
+if api_key:
+    genai.configure(api_key=api_key)
+else:
+    print("Chua tim thay GEMINI_API_KEY. Chat Gemini se tam dung, cac endpoint recommendation van chay.")
 
 app = FastAPI(title="Gemini RAG Chatbot API")
 
@@ -115,6 +115,9 @@ async def save_chat_to_springboot(user_id: str, user_message: str, bot_reply: st
 @app.post("/api/chat")
 async def chat_with_gemini(request: ChatRequest, background_tasks: BackgroundTasks):
     try:
+        if not api_key:
+            raise HTTPException(status_code=503, detail="Chua cau hinh GEMINI_API_KEY.")
+
         user_msg = request.message
         
         context = '' 
@@ -158,6 +161,8 @@ async def chat_with_gemini(request: ChatRequest, background_tasks: BackgroundTas
             "status": "success",
             "reply": bot_reply
         }
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"======== CHI TIẾT LỖI TỪ GEMINI ======== \n{str(e)}")
         raise HTTPException(status_code=500, detail="Đã xảy ra lỗi kết nối với Gemini API.")
@@ -192,3 +197,8 @@ def get_content_based_api(product_id: int, top_n: int = 5):
 @app.get("/")
 async def root():
     return {"message": "FastAPI Server: Gemini Chatbot & Recommendation System is running!"}
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=8000)
