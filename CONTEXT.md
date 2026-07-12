@@ -324,6 +324,7 @@ pip install -r requirements.txt
 | Ngày | Lỗi | Nguyên nhân | Cách tránh | File liên quan |
 |---|---|---|---|---|
 | Chưa có | Chưa có | Chưa có | Chưa có | Chưa có |
+| 12/07/2026 | Kết nối MySQL trực tiếp lộ password | pymysql hard-code trong recommendation.py | Dùng REST API + service key từ .env | recommendation.py |
 
 ---
 
@@ -389,3 +390,20 @@ pip install -r requirements.txt
 - Noi dung thay doi: scoring tim tren toan bo `specs`; uu tien cac spec chip/CPU/GPU/RAM/pin/man hinh khi dua vao prompt; them field rieng `Chip xu ly`, `Chip do hoa`; loc dung model phrase nhu `iphone 15` de khong keo Xiaomi/realme co so 15 vao ket qua; prompt yeu cau dung `Chip xu ly` truoc khi hoi CPU.
 - Kiem tra: `python -m py_compile main.py recommendation.py` thanh cong; helper loc `may iphone 15 dung chip xu ly gi` chi tra iPhone 15/15 Plus va prompt co `Chip xu ly: Apple A16 Bionic`; `Apple A16` va `chip Apple A16` co ket qua.
 - Luu y: khong sua backend, vi backend da co spec CPU dung; loi nam o chatbot cat ngan/cham diem specs.
+
+---
+
+## Cap nhat 2026-07-12 – F01, E01, E02
+
+- **Nguoi thuc hien:** Hung
+- **Nguoi dung yeu cau:** Thuc hien task ngay 12/07 (F01, E01, E02).
+- **File da sua:** `requirements.txt`, `recommendation.py`.
+- **Noi dung thay doi:**
+  - F01: Lam sach `requirements.txt` – xoa ~30 package thua (torch, torchvision, openai, Django, pymysql, pyinstaller, customtkinter, opencv, pygame, matplotlib, google-genai...). Chi giu package thuc su dung trong main.py va recommendation.py.
+  - E01: Xoa ket noi MySQL (`pymysql`). Thay bang `fetch_all_products()` goi `/api/products` va `fetch_user_interactions()` goi `/api/reviews`. Ca 2 ham dung service key tu bien moi truong `SOPE_SERVICE_KEY`, timeout `SOPE_API_TIMEOUT`, xu ly loi graceful.
+  - E02: Them ham `build_product_description(product)` ghep ten, hang, loai, specs, mo ta ngan, khoang gia thanh chuoi text chuan hoa (bo dau, lowercase). Dung lam input TF-IDF trong `build_content_based_engine()`.
+- **Bien moi truong moi (them vao .env):** `SOPE_SERVICE_KEY`, `SOPE_API_TIMEOUT`.
+- **Kiem tra:** `python -m py_compile main.py recommendation.py` – thanh cong.
+- **Khong con trong code:** `pymysql`, password MySQL hard-code.
+- **Anh huong backend:** Backend can co `GET /api/reviews`; neu chua co, CF tra list rong (graceful fallback).
+- **Viec can lam tiep (ngay 13/07):** E03, E04, F04, F05.
