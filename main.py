@@ -14,7 +14,8 @@ import requests
 import google.generativeai as genai
 
 import recommendation
-from recommendation import get_recommendations 
+from recommendation import get_recommendations
+from normalize_specs import normalize_product_specs  # E03
 
 load_dotenv()
 
@@ -30,13 +31,57 @@ class ChatRequest(BaseModel):
     message: str
 
 # ==========================================
-# 1. KNOWLEDGE BASE (RAG CƠ BẢN)
+# 1. CHÍNH SÁCH – F05: Load từ policy.json, không hard-code
 # ==========================================
-faq_data = { 
-  'giao hàng': 'Đơn hàng giao trong 3-5 ngày làm việc. Hỏa tốc: 2h tại HCM.', 
-  'đổi trả': 'Đổi trả trong 30 ngày, hàng còn nguyên tem mác.', 
-  'thanh toán': 'Hỗ trợ COD, VNPAY, MoMo, ZaloPay, thẻ tín dụng.', 
-}
+_POLICY_FILE = os.path.join(os.path.dirname(__file__), "policy.json")
+_POLICY_API_URL = os.getenv("SOPE_POLICY_API_URL", "")  # nếu có endpoint chính sách từ backend
+
+def _load_policy() -> Dict[str, Any]:
+    """
+    F05: Đọc nội dung chính sách từ file policy.json hoặc API chính sách.
+    Fallback về dict rỗng nếu không đọc được.
+    Không hard-code nội dung chính sách trong code.
+    """
+    # Ưu tiên 1: API chính sách từ backend (nếu được cấu hình)
+    if _POLICY_API_URL:
+        try:
+            resp = requests.get(_POLICY_API_URL, timeout=5.0)
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception as exc:
+            print(f"[policy] Loi load tu API chinh sach: {exc}")
+
+    # Ưu tiên 2: File policy.json cục bộ
+    try:
+        with open(_POLICY_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        # Lọc bỏ các key comment
+        return {k: v for k, v in data.items() if not k.startswith("_")}
+    except Exception as exc:
+        print(f"[policy] Loi doc policy.json: {exc}")
+
+    return {}
+
+# Load khi khởi động; reload bằng cách gọi lại hàm
+_policy_data: Dict[str, Any] = _load_policy()
+
+
+def match_policy(message: str) -> str:
+    """
+    F05: Tìm nội dung chính sách phù hợp với câu hỏi.
+    Dùng keyword từ policy.json, không hard-code.
+    Trả chuỗi rỗng nếu không match.
+    """
+    normalized = normalize_text(message)
+    matched_parts = []
+    for _topic, entry in _policy_data.items():
+        if not isinstance(entry, dict):
+            continue
+        keywords: List[str] = entry.get("keywords", [])
+        content: str = entry.get("content", "")
+        if any(kw in normalized for kw in keywords):
+            matched_parts.append(content)
+    return " ".join(matched_parts)
 
 
 BACKEND_API_BASE_URL = os.getenv("SOPE_BACKEND_API_URL", "http://localhost:8080/api").rstrip("/")
@@ -54,44 +99,86 @@ PRODUCTS_CACHE_TTL_SECONDS = get_int_env("SOPE_PRODUCTS_CACHE_TTL_SECONDS", 60)
 MAX_PRODUCTS_FOR_PROMPT = get_int_env("SOPE_CHATBOT_MAX_PRODUCTS_FOR_PROMPT", 15)
 _product_cache: Dict[str, Any] = {"expires_at": 0.0, "products": []}
 
+# F04: Tập từ khóa nhận diện ý định sản phẩm
+# Lưu ý: "giao" KHÔNG có ở đây (tránh nhầm với "giao hàng")
+# "gia" chỉ khớp khi đi kèm ngữ cảnh sản phẩm (xem is_product_question)
 PRODUCT_INTENT_TERMS = (
     "san pham",
     "goi y",
     "tu van",
     "mua",
-    "gia",
     "dien thoai",
     "smartphone",
     "iphone",
     "samsung",
+    "samsung galaxy",
     "oppo",
     "xiaomi",
     "vivo",
+    "realme",
     "laptop",
     "macbook",
-    "may tinh",
+    "may tinh xach tay",
     "may tinh bang",
     "tablet",
     "ipad",
+    "galaxy tab",       # F04: Samsung tablet
+    "galaxy a",         # F04: Samsung Galaxy A series
+    "galaxy s",         # F04: Samsung Galaxy S series
+    "galaxy z",         # F04: Samsung Galaxy Z fold/flip
     "bao hanh",
     "khuyen mai",
     "con hang",
+    "cau hinh",
+    "thong so",
+    "chip",
+    "ram",
+    "pin",
+    "man hinh",
 )
 
+# F04: Category aliases – bổ sung Samsung tablet
 CATEGORY_ALIASES = {
-    "phone": ("phone", "dien thoai", "smartphone", "iphone", "samsung", "oppo", "xiaomi", "vivo"),
-    "laptop": ("laptop", "macbook", "may tinh xach tay"),
-    "tablet": ("tablet", "ipad", "may tinh bang"),
+    "phone": (
+        "phone", "dien thoai", "smartphone",
+        "iphone",
+        "samsung", "galaxy s", "galaxy a", "galaxy z", "galaxy m",
+        "oppo", "oppo reno", "oppo a",
+        "xiaomi", "redmi", "poco",
+        "vivo", "realme",
+    ),
+    "laptop": (
+        "laptop", "macbook", "may tinh xach tay",
+        "may tinh laptop", "notebook",
+        "gaming laptop", "laptop gaming",
+    ),
+    "tablet": (
+        "tablet", "ipad", "may tinh bang",
+        "galaxy tab",          # F04: Samsung tablet
+        "samsung tab",
+        "galaxy tab s", "galaxy tab a",
+        "lenovo tab", "xiaomi pad",
+    ),
 }
 
+# F04: Family aliases – thêm các đời iPhone cụ thể và Samsung tablet
 PRODUCT_FAMILY_ALIASES = (
+    # Apple phones
     "iphone",
-    "ipad",
-    "macbook",
+    "iphone 13", "iphone 14", "iphone 15", "iphone 16",
+    "iphone se", "iphone pro", "iphone pro max", "iphone plus",
+    # Apple tablet
+    "ipad", "ipad pro", "ipad air", "ipad mini",
+    # Apple laptop
+    "macbook", "macbook air", "macbook pro",
+    # Samsung phones
     "samsung",
-    "oppo",
-    "xiaomi",
-    "redmi",
+    "galaxy s", "galaxy a", "galaxy z", "galaxy m", "galaxy f",
+    # Samsung tablet – F04
+    "galaxy tab", "galaxy tab s", "galaxy tab a",
+    # Khác
+    "oppo", "oppo reno", "oppo a",
+    "xiaomi", "redmi", "poco",
     "vivo",
     "realme",
 )
@@ -183,9 +270,43 @@ def load_products_from_backend(force_refresh: bool = False) -> List[Dict[str, An
     return cached_products
 
 
-def is_product_question(message: str) -> bool:
+# F04: Từ khóa chỉ GIAO HÀNG (delivery) – không phải ý định sản phẩm
+_DELIVERY_ONLY_TERMS = (
+    "giao hang", "phi ship", "phi giao", "van chuyen",
+    "nhan hang", "thoi gian giao", "bao lau giao",
+)
+# F04: Từ khóa GIÁ (price) chỉ tính là ý định sản phẩm khi đi kèm sản phẩm
+_PRICE_ALONE_TERMS = ("gia bao nhieu", "gia la bao nhieu", "gia nhu the nao")
+
+
+def is_delivery_question(message: str) -> bool:
+    """F04: Phân biệt câu hỏi giao hàng với câu hỏi giá sản phẩm."""
     normalized = normalize_text(message)
-    return any(term in normalized for term in PRODUCT_INTENT_TERMS)
+    return any(term in normalized for term in _DELIVERY_ONLY_TERMS)
+
+
+def is_product_question(message: str) -> bool:
+    """
+    F04: Nhận diện ý định hỏi về sản phẩm.
+    Phân biệt 'giao' (giao hàng) vs 'giá' (giá sản phẩm):
+    - Câu hỏi thuần giao hàng (phi ship, thoi gian giao...) → False
+    - 'giá' chỉ tính là product intent khi kèm tên sản phẩm hoặc từ khóa khác
+    """
+    normalized = normalize_text(message)
+    # Nếu chỉ hỏi giao hàng mà không đề cập sản phẩm → không phải product question
+    if is_delivery_question(normalized) and not any(
+        term in normalized for term in PRODUCT_INTENT_TERMS
+    ):
+        return False
+    # Kiểm tra từ khóa sản phẩm
+    if any(term in normalized for term in PRODUCT_INTENT_TERMS):
+        return True
+    # "gia" đơn độc chỉ tính nếu có tên hãng/sản phẩm đi kèm
+    if "gia" in normalized and any(
+        family in normalized for family in PRODUCT_FAMILY_ALIASES
+    ):
+        return True
+    return False
 
 
 def detect_categories(message: str) -> List[str]:
@@ -492,10 +613,8 @@ async def chat_with_gemini(request: ChatRequest, background_tasks: BackgroundTas
 
         user_msg = request.message
         
-        context = '' 
-        for key, val in faq_data.items(): 
-            if key in user_msg.lower(): 
-                context += val + ' ' 
+        # F05: Lấy nội dung chính sách từ policy.json, không hard-code
+        context = match_policy(user_msg)
 
         product_catalog_str = "[]"
         if is_product_question(user_msg):
@@ -526,20 +645,21 @@ async def chat_with_gemini(request: ChatRequest, background_tasks: BackgroundTas
                 ensure_ascii=False
             )
 
-        system_instruction = f"""Bạn là chatbot CSKH của hệ thống SOPE, chuyên tư vấn các dòng thiết bị công nghệ. 
-            FAQ liên quan: {context or "Không có"} 
-            Sản phẩm lấy từ backend SOPE /api/products, đã lọc theo câu hỏi hiện tại: {product_catalog_str}
+        system_instruction = f"""Bạn là chatbot CSKH của hệ thống SOPE, chuyên tư vấn thiết bị công nghệ.
 
-            Nhiệm vụ của bạn:
-            - Luôn xưng hô thân thiện, nhiệt tình.
-            - CHỈ được tư vấn, gợi ý, so sánh hoặc nhắc tên sản phẩm có trong danh sách JSON ở trên.
-            - Không dùng kiến thức bên ngoài, web, hoặc folder data của chatbot để tự thêm sản phẩm.
-            - Nếu danh sách JSON rỗng hoặc không đủ thông tin, hãy nói rõ chưa có dữ liệu phù hợp trong hệ thống SOPE.
-            - Nếu khách hỏi tên rút gọn, chỉ được hiểu gần đúng trong phạm vi các sản phẩm có trong danh sách JSON.
-            - Nếu khách hỏi một mẫu máy cụ thể, hãy trả lời trực tiếp theo sản phẩm khớp nhất trong JSON; không nhắc các sản phẩm khác trừ khi khách hỏi so sánh hoặc gợi ý thêm.
-            - Khi gợi ý sản phẩm, bắt buộc đính kèm link Markdown bằng đúng ID trong JSON: [Tên sản phẩm](/products/ID).
-            - Nếu khách hỏi "chip xử lý", "CPU" hoặc "dùng chip gì", hãy trả lời bằng field "Chip xử lý" trước; không lấy "Chip đồ họa" thay cho CPU.
-            - Khi so sánh, chỉ dùng mô tả/cấu hình/giá trong JSON; thiếu thông tin nào thì nói rõ thiếu, không đoán.
+            CHÍNH SÁCH SOPE (F05 – lấy từ policy.json): {context or "Không có thông tin chính sách liên quan."}
+
+            SẢN PHẨM (lấy từ backend /api/products, đã lọc): {product_catalog_str}
+
+            QUY TẮC TRẢ LỜI:
+            - Xưng hô thân thiện, nhiệt tình.
+            - CHỈ tư vấn sản phẩm có trong danh sách JSON ở trên. Không bịa.
+            - Khi hỏi chính sách (giao hàng, đổi trả, thanh toán), dùng phần CHÍNH SÁCH ở trên;
+              nếu không có thông tin, nói rõ cần liên hệ CSKH.
+            - Không hard-code thông tin chính sách không có trong CHÍNH SÁCH SOPE trên.
+            - Khi gợi ý sản phẩm, đính kèm link: [Tên sản phẩm](/products/ID).
+            - Khi hỏi chip/CPU, dùng field 'Chip xử lý'; không dùng 'Chip đồ họa' thay thế.
+            - Khi so sánh, chỉ dùng dữ liệu trong JSON; thiếu thì nói rõ.
             - Trả lời súc tích, đi thẳng vào vấn đề."""
 
         model = genai.GenerativeModel(

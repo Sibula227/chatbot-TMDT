@@ -1,11 +1,14 @@
 """
 recommendation.py – SOPE Chatbot Recommendation Module
-Cập nhật: 2026-07-12
+Cập nhật: 2026-07-13
 Tasks:
   E01 – Không kết nối MySQL trực tiếp; lấy dữ liệu qua REST API nội bộ
          với service key và timeout.
   E02 – Hàm build_product_description() ghép tên, hãng, loại, thông số,
          mô tả và khoảng giá thành chuỗi text dùng cho so sánh sản phẩm.
+  E03 – Chuẩn hóa thay thành các thông số trước khi tính vector.
+  E04 – Lọc sản phẩm gợi ý hợp lý: cùng loại, đang bán, còn hàng,
+         không gợi ý chính sản phẩm đang xem, giới hạn số lượng.
 """
 
 import os
@@ -20,6 +23,7 @@ import requests
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from dotenv import load_dotenv
+from normalize_specs import normalize_product_specs  # E03
 
 load_dotenv()
 
@@ -264,6 +268,84 @@ def build_product_description(product: Dict[str, Any]) -> str:
 
 
 # ============================================================
+# E04 – LỌC SẢN PHẨM GỢI Ý HỢP LÝ
+# ============================================================
+
+# Giới hạn tối đa top_n được phép trả về
+_MAX_RECOMMENDATIONS = int(os.getenv("SOPE_MAX_RECOMMENDATIONS", "10"))
+
+
+def filter_recommendable(
+    products: List[Dict[str, Any]],
+    *,
+    exclude_id: Optional[int] = None,
+    same_category: Optional[str] = None,
+    top_n: int = 5,
+) -> List[int]:
+    """
+    E04: Giữ lại các product_id hợp lệ để gợi ý:
+      - Cùng loại (category) với sản phẩm đang xem (nếu truyền same_category).
+      - Đang bán (status == 'active' / available == True / không có flag ngưng bán).
+      - Còn hàng (stockQuantity > 0 hoặc không có field tồn kho → cho qua).
+      - Không gợi ý chính sản phẩm đang xem (exclude_id).
+      - Giới hạn số lượng tối đa _MAX_RECOMMENDATIONS.
+    Trả list product_id (int) đã lọc.
+    """
+    safe_top_n = min(top_n, _MAX_RECOMMENDATIONS)
+    result: List[int] = []
+
+    for p in products:
+        pid = p.get("id")
+        if pid is None:
+            continue
+        pid = int(pid)
+
+        # Loại chính sản phẩm đang xem
+        if exclude_id is not None and pid == exclude_id:
+            continue
+
+        # Kiểm tra cùng loại
+        if same_category:
+            cat = str(p.get("category") or "").lower().strip()
+            if cat != same_category.lower().strip():
+                continue
+
+        # Kiểm tra đang bán
+        status = str(p.get("status") or "").lower()
+        available = p.get("available")
+        active = p.get("active")
+        is_selling = p.get("isSelling")
+        if status and status not in ("", "active", "selling", "available", "published", "1"):
+            continue  # ngưng bán, ẩn, draft...
+        if available is not None and not available:
+            continue
+        if active is not None and not active:
+            continue
+        if is_selling is not None and not is_selling:
+            continue
+
+        # Kiểm tra còn hàng – ưu tiên field đầu tiên khác None
+        stock = None
+        for stock_field in ("stockQuantity", "stock", "quantity"):
+            val = p.get(stock_field)
+            if val is not None:
+                stock = val
+                break
+        if stock is not None:
+            try:
+                if int(stock) <= 0:
+                    continue  # hết hàng
+            except (ValueError, TypeError):
+                pass  # không parse được → cho qua
+
+        result.append(pid)
+        if len(result) >= safe_top_n:
+            break
+
+    return result
+
+
+# ============================================================
 # CF – COLLABORATIVE FILTERING  (E01: thay MySQL bằng API)
 # ============================================================
 
@@ -347,8 +429,8 @@ def build_content_based_engine() -> pd.DataFrame:
     """
     Xây dựng ma trận tương đồng content-based.
     [E01] Lấy danh sách sản phẩm từ backend API (không dùng MySQL).
-    [E02] Dùng build_product_description() để tạo "hồ sơ" sản phẩm
-          từ tên, hãng, loại, thông số, mô tả và khoảng giá.
+    [E02] Dùng build_product_description() để tạo "hồ sơ" sản phẩm.
+    [E03] Chuẩn hóa specs trước khi tính TF-IDF.
     """
     products = fetch_all_products()
     if not products:
@@ -357,9 +439,12 @@ def build_content_based_engine() -> pd.DataFrame:
 
     print(f"========== Product Data ========== \nTổng sản phẩm: {len(products)}")
 
-    # Tạo profile mô tả cho từng sản phẩm (E02)
+    # E03: Chuẩn hóa specs trước khi tạo profile
+    normalized_products = [normalize_product_specs(p) for p in products]
+
+    # Tạo profile mô tả cho từng sản phẩm (E02 + E03)
     records = []
-    for product in products:
+    for product in normalized_products:
         pid = product.get("id")
         if pid is None:
             continue
@@ -378,9 +463,9 @@ def build_content_based_engine() -> pd.DataFrame:
     # TF-IDF vectorize
     tfidf = TfidfVectorizer(
         analyzer="word",
-        ngram_range=(1, 2),   # unigram + bigram để bắt "iphone 15", "8gb ram"
+        ngram_range=(1, 2),
         min_df=1,
-        sublinear_tf=True,    # log(tf+1) để giảm ảnh hưởng tần suất quá cao
+        sublinear_tf=True,
     )
     tfidf_matrix = tfidf.fit_transform(product_profiles["description"])
 
@@ -393,16 +478,22 @@ def build_content_based_engine() -> pd.DataFrame:
     return cbf_similarity_df
 
 
-def get_content_based_similar_products(product_id: int, top_n: int = 5) -> List[int]:
+def get_content_based_similar_products(
+    product_id: int,
+    top_n: int = 5,
+    products_ref: Optional[List[Dict[str, Any]]] = None,
+) -> List[int]:
     """
     CBF: Gợi ý sản phẩm tương tự dựa trên mô tả tổng hợp.
     [E01] Nguồn dữ liệu từ API, không MySQL.
     [E02] Mô tả tổng hợp gồm tên, hãng, loại, thông số, mô tả, giá.
+    [E03] Specs đã chuẩn hóa trước khi tính vector.
+    [E04] Lọc kết quả: cùng loại, đang bán, còn hàng, không gợi ý chính SP đang xem.
     """
     cbf_similarity_df = build_content_based_engine()
 
     if cbf_similarity_df.empty:
-        print(f"[recommendation] CBF: Ma trận rỗng, không thể gợi ý.")
+        print("[recommendation] CBF: Ma trận rỗng, không thể gợi ý.")
         return []
 
     print(f"[recommendation] CBF request: product_id={product_id}")
@@ -411,8 +502,35 @@ def get_content_based_similar_products(product_id: int, top_n: int = 5) -> List[
         print(f"[recommendation] CBF: Không có product_id={product_id} trong ma trận.")
         return []
 
+    # Lấy top sản phẩm tương tự (bỏ chính nó)
     similar_items = cbf_similarity_df[product_id].sort_values(ascending=False)
-    recommendations = similar_items.iloc[1 : top_n + 1].index.tolist()
+    candidate_ids = similar_items.iloc[1:].index.tolist()  # bỏ index 0 = chính sản phẩm
 
-    print(f"[recommendation] CBF top-{top_n}: {recommendations}")
+    # E04: Lọc hợp lý nếu có dữ liệu sản phẩm để kiểm tra status/stock/category
+    if products_ref:
+        # Tìm danh mục của sản phẩm đang xem
+        current_category: Optional[str] = None
+        for p in products_ref:
+            if p.get("id") == product_id:
+                current_category = str(p.get("category") or "").lower().strip()
+                break
+
+        # Sắp xếp products_ref theo thứ tự candidate_ids
+        id_to_product = {int(p["id"]): p for p in products_ref if p.get("id") is not None}
+        ordered = [id_to_product[cid] for cid in candidate_ids if cid in id_to_product]
+
+        recommendations = filter_recommendable(
+            ordered,
+            exclude_id=product_id,
+            same_category=current_category,
+            top_n=top_n,
+        )
+    else:
+        # Fallback: không có dữ liệu để lọc, chỉ bỏ chính sản phẩm + giới hạn top_n
+        safe_n = min(top_n, _MAX_RECOMMENDATIONS)
+        recommendations = [
+            cid for cid in candidate_ids if cid != product_id
+        ][:safe_n]
+
+    print(f"[recommendation] CBF top-{top_n} (sau lọc E04): {recommendations}")
     return recommendations

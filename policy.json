@@ -1,0 +1,30 @@
+{
+  "_comment": "File chính sách SOPE – chatbot đọc từ đây, không hard-code trong main.py",
+  "_version": "1.0",
+  "_updated": "2026-07-13",
+
+  "giao hang": {
+    "keywords": ["giao hang", "giao", "ship", "van chuyen", "nhan hang", "thoi gian giao", "bao lau giao", "phi giao"],
+    "content": "Đơn hàng tiêu chuẩn giao trong 3–5 ngày làm việc. Giao hỏa tốc trong 2 giờ tại TP.HCM (áp dụng một số khu vực). Đơn từ 500.000đ được miễn phí giao hàng tiêu chuẩn. Phí ship tính theo khu vực và phương thức vận chuyển."
+  },
+
+  "doi tra": {
+    "keywords": ["doi tra", "doi hang", "tra hang", "hoan tien", "bao hanh", "loi hang", "kiem tra hang", "30 ngay"],
+    "content": "Sản phẩm được đổi trả trong vòng 30 ngày kể từ ngày nhận hàng, với điều kiện còn nguyên tem mác, chưa qua sử dụng hoặc lỗi do nhà sản xuất. Hàng điện tử bảo hành theo chính sách hãng (thường 12–24 tháng). Liên hệ CSKH để được hỗ trợ."
+  },
+
+  "thanh toan": {
+    "keywords": ["thanh toan", "tra tien", "payment", "chuyen khoan", "cod", "vnpay", "momo", "zalopay", "the tin dung", "tra gop", "phuong thuc thanh toan"],
+    "content": "SOPE hỗ trợ nhiều hình thức thanh toán: COD (tiền mặt khi nhận hàng), chuyển khoản ngân hàng, VNPAY, MoMo, ZaloPay, thẻ tín dụng/ghi nợ Visa/MasterCard. Trả góp 0% lãi suất áp dụng cho đơn từ 3 triệu đồng (qua thẻ tín dụng đối tác)."
+  },
+
+  "khuyen mai": {
+    "keywords": ["khuyen mai", "ma giam", "coupon", "voucher", "giam gia", "flash sale", "uu dai", "khuyen mai thang"],
+    "content": "Mã giảm giá và khuyến mãi hiển thị trên trang sản phẩm và trang Flash Sale. Vui lòng kiểm tra mục 'Khuyến mãi' trên website SOPE hoặc hỏi mã cụ thể để tôi tra cứu."
+  },
+
+  "ho tro": {
+    "keywords": ["ho tro", "lien he", "cskh", "cham soc khach hang", "hotline", "email ho tro"],
+    "content": "CSKH SOPE hoạt động 8h–22h mỗi ngày. Hotline: 1800-xxxx (miễn phí). Email: support@sope.vn. Chat trực tiếp trên website."
+  }
+}
