@@ -1,14 +1,16 @@
 """
 recommendation.py – SOPE Chatbot Recommendation Module
-Cập nhật: 2026-07-13
+Cập nhật: 2026-07-14
 Tasks:
   E01 – Không kết nối MySQL trực tiếp; lấy dữ liệu qua REST API nội bộ
          với service key và timeout.
   E02 – Hàm build_product_description() ghép tên, hãng, loại, thông số,
          mô tả và khoảng giá thành chuỗi text dùng cho so sánh sản phẩm.
-  E03 – Chuẩn hóa thay thành các thông số trước khi tính vector.
+  E03 – Chuẩn hóa thông số trước khi tính vector.
   E04 – Lọc sản phẩm gợi ý hợp lý: cùng loại, đang bán, còn hàng,
          không gợi ý chính sản phẩm đang xem, giới hạn số lượng.
+  E05 – Cache ma trận TF-IDF in-memory; chỉ tính lại khi danh mục thay đổi.
+  E06 – Cold start: gợi ý sản phẩm phổ biến / đánh giá cao khi chưa có lịch sử.
 """
 
 import os
@@ -425,19 +427,57 @@ def get_similar_products(product_id: int, top_n: int = 5) -> List[int]:
 # CBF – CONTENT-BASED FILTERING  (E01 + E02)
 # ============================================================
 
+# ============================================================
+# E05 – CACHE MA TRẬN CBF IN-MEMORY
+# Chỉ tính lại khi tập product_id thay đổi (danh mục cập nhật)
+# ============================================================
+
+_CBF_CACHE_TTL = int(os.getenv("SOPE_CBF_CACHE_TTL", "3600"))  # giây, mặc định 1h
+
+_cbf_cache: Dict[str, Any] = {
+    "matrix":      None,   # pd.DataFrame | None
+    "product_ids": None,   # frozenset[int] | None – khóa để kiểm tra thay đổi
+    "expires_at":  0.0,    # timestamp hết hạn
+    "raw_products": None,  # list sản phẩm gốc, dùng cho E04 filter
+}
+
+
+def _cbf_cache_key(products: List[Dict[str, Any]]) -> frozenset:
+    """Tạo khóa cache từ tập product_id hiện tại."""
+    return frozenset(int(p["id"]) for p in products if p.get("id") is not None)
+
+
 def build_content_based_engine() -> pd.DataFrame:
     """
     Xây dựng ma trận tương đồng content-based.
     [E01] Lấy danh sách sản phẩm từ backend API (không dùng MySQL).
     [E02] Dùng build_product_description() để tạo "hồ sơ" sản phẩm.
     [E03] Chuẩn hóa specs trước khi tính TF-IDF.
+    [E05] Kiểm tra cache: chỉ tính lại nếu danh mục sản phẩm thay đổi hoặc cache hết hạn.
     """
     products = fetch_all_products()
     if not products:
         print("[recommendation] CBF: Không lấy được sản phẩm từ backend.")
+        # Trả cache cũ nếu vẫn còn
+        if _cbf_cache["matrix"] is not None and not _cbf_cache["matrix"].empty:
+            print("[recommendation] CBF: Dùng lại cache cũ.")
+            return _cbf_cache["matrix"]
         return pd.DataFrame()
 
-    print(f"========== Product Data ========== \nTổng sản phẩm: {len(products)}")
+    now = time.time()
+    current_key = _cbf_cache_key(products)
+
+    # E05: Trả cache nếu không có gì thay đổi và chưa hết hạn
+    if (
+        _cbf_cache["matrix"] is not None
+        and not _cbf_cache["matrix"].empty
+        and _cbf_cache["product_ids"] == current_key
+        and now < _cbf_cache["expires_at"]
+    ):
+        print(f"[recommendation] CBF: Dùng cache (còn {int(_cbf_cache['expires_at'] - now)}s).")
+        return _cbf_cache["matrix"]
+
+    print(f"[recommendation] CBF: Tính lại ma trận ({len(products)} sản phẩm)...")
 
     # E03: Chuẩn hóa specs trước khi tạo profile
     normalized_products = [normalize_product_specs(p) for p in products]
@@ -458,7 +498,6 @@ def build_content_based_engine() -> pd.DataFrame:
 
     product_profiles = pd.DataFrame(records).set_index("product_id")
     print(f"Số sản phẩm có profile: {len(product_profiles)}")
-    print("==================================")
 
     # TF-IDF vectorize
     tfidf = TfidfVectorizer(
@@ -468,14 +507,31 @@ def build_content_based_engine() -> pd.DataFrame:
         sublinear_tf=True,
     )
     tfidf_matrix = tfidf.fit_transform(product_profiles["description"])
-
     cosine_sim = cosine_similarity(tfidf_matrix, tfidf_matrix)
     cbf_similarity_df = pd.DataFrame(
         cosine_sim,
         index=product_profiles.index,
         columns=product_profiles.index,
     )
+
+    # E05: Lưu vào cache
+    _cbf_cache["matrix"]       = cbf_similarity_df
+    _cbf_cache["product_ids"]  = current_key
+    _cbf_cache["expires_at"]   = now + _CBF_CACHE_TTL
+    _cbf_cache["raw_products"] = products  # dùng cho filter E04
+    print(f"[recommendation] CBF: Cache cập nhật (TTL={_CBF_CACHE_TTL}s).")
+
     return cbf_similarity_df
+
+
+def invalidate_cbf_cache() -> None:
+    """
+    E05: Buộc tính lại ma trận lần tiếp theo
+    (gọi khi backend thông báo danh mục đã thay đổi).
+    """
+    _cbf_cache["product_ids"] = None
+    _cbf_cache["expires_at"]  = 0.0
+    print("[recommendation] CBF cache đã bị xóa, sẽ tính lại lần sau.")
 
 
 def get_content_based_similar_products(
@@ -485,10 +541,8 @@ def get_content_based_similar_products(
 ) -> List[int]:
     """
     CBF: Gợi ý sản phẩm tương tự dựa trên mô tả tổng hợp.
-    [E01] Nguồn dữ liệu từ API, không MySQL.
-    [E02] Mô tả tổng hợp gồm tên, hãng, loại, thông số, mô tả, giá.
-    [E03] Specs đã chuẩn hóa trước khi tính vector.
-    [E04] Lọc kết quả: cùng loại, đang bán, còn hàng, không gợi ý chính SP đang xem.
+    [E05] Dùng cache matrix, không tính lại nếu danh mục chưa đổi.
+    [E04] Lọc kết quả: cùng loại, đang bán, còn hàng.
     """
     cbf_similarity_df = build_content_based_engine()
 
@@ -496,29 +550,25 @@ def get_content_based_similar_products(
         print("[recommendation] CBF: Ma trận rỗng, không thể gợi ý.")
         return []
 
-    print(f"[recommendation] CBF request: product_id={product_id}")
-
     if product_id not in cbf_similarity_df.columns:
         print(f"[recommendation] CBF: Không có product_id={product_id} trong ma trận.")
         return []
 
-    # Lấy top sản phẩm tương tự (bỏ chính nó)
+    # Lấy các ứng viên (bỏ chính sản phẩm)
     similar_items = cbf_similarity_df[product_id].sort_values(ascending=False)
-    candidate_ids = similar_items.iloc[1:].index.tolist()  # bỏ index 0 = chính sản phẩm
+    candidate_ids = similar_items.iloc[1:].index.tolist()
 
-    # E04: Lọc hợp lý nếu có dữ liệu sản phẩm để kiểm tra status/stock/category
-    if products_ref:
-        # Tìm danh mục của sản phẩm đang xem
+    # Dùng raw_products từ cache nếu có, hoặc products_ref từ caller
+    ref = products_ref or _cbf_cache.get("raw_products") or []
+
+    if ref:
         current_category: Optional[str] = None
-        for p in products_ref:
-            if p.get("id") == product_id:
+        for p in ref:
+            if p.get("id") == product_id or int(p.get("id", -1)) == product_id:
                 current_category = str(p.get("category") or "").lower().strip()
                 break
-
-        # Sắp xếp products_ref theo thứ tự candidate_ids
-        id_to_product = {int(p["id"]): p for p in products_ref if p.get("id") is not None}
+        id_to_product = {int(p["id"]): p for p in ref if p.get("id") is not None}
         ordered = [id_to_product[cid] for cid in candidate_ids if cid in id_to_product]
-
         recommendations = filter_recommendable(
             ordered,
             exclude_id=product_id,
@@ -526,11 +576,98 @@ def get_content_based_similar_products(
             top_n=top_n,
         )
     else:
-        # Fallback: không có dữ liệu để lọc, chỉ bỏ chính sản phẩm + giới hạn top_n
         safe_n = min(top_n, _MAX_RECOMMENDATIONS)
-        recommendations = [
-            cid for cid in candidate_ids if cid != product_id
-        ][:safe_n]
+        recommendations = [cid for cid in candidate_ids if cid != product_id][:safe_n]
 
-    print(f"[recommendation] CBF top-{top_n} (sau lọc E04): {recommendations}")
+    print(f"[recommendation] CBF top-{top_n} (E04+E05): {recommendations}")
     return recommendations
+
+
+# ============================================================
+# E06 – COLD START: GỢI Ý SẢN PHẨM PHỔ BIẾN / ĐÁNH GIÁ CAO
+# ============================================================
+
+def get_cold_start_recommendations(
+    top_n: int = 5,
+    category: Optional[str] = None,
+    exclude_ids: Optional[List[int]] = None,
+) -> List[int]:
+    """
+    E06: Fallback cho người dùng mới hoặc chưa có lịch sử tương tác.
+    Ưu tiên 1: sản phẩm có rating trung bình cao nhất.
+    Ưu tiên 2: nếu không có review, dùng sản phẩm mới nhất (id lớn nhất).
+    Có thể lọc theo danh mục và loại trừ exclude_ids.
+    """
+    exclude_set = set(exclude_ids or [])
+    products = _cbf_cache.get("raw_products") or fetch_all_products()
+
+    if not products:
+        return []
+
+    # Lọc: đang bán, còn hàng, đúng danh mục
+    candidates = []
+    for p in products:
+        pid = p.get("id")
+        if pid is None:
+            continue
+        pid = int(pid)
+        if pid in exclude_set:
+            continue
+
+        # Lọc danh mục (tùy chọn)
+        if category:
+            cat = str(p.get("category") or "").lower().strip()
+            if cat != category.lower().strip():
+                continue
+
+        # Kiểm tra đang bán
+        status = str(p.get("status") or "").lower()
+        if status and status not in ("", "active", "selling", "available", "published", "1"):
+            continue
+        if p.get("available") is not None and not p["available"]:
+            continue
+
+        # Kiểm tra còn hàng
+        stock = None
+        for sf in ("stockQuantity", "stock", "quantity"):
+            v = p.get(sf)
+            if v is not None:
+                stock = v
+                break
+        if stock is not None:
+            try:
+                if int(stock) <= 0:
+                    continue
+            except (ValueError, TypeError):
+                pass
+
+        # Điểm phổ biến: uu tiên averageRating, rồi reviewCount, rồi id mới
+        avg_rating = float(p.get("averageRating") or p.get("avgRating") or 0)
+        review_cnt = int(p.get("reviewCount") or p.get("totalReviews") or 0)
+        candidates.append((avg_rating, review_cnt, pid, p))
+
+    if not candidates:
+        return []
+
+    # Sắp xếp: rating cao → review nhiều → id mới (mới ra hàng)
+    candidates.sort(key=lambda x: (-x[0], -x[1], -x[2]))
+
+    safe_n = min(top_n, _MAX_RECOMMENDATIONS)
+    result = [c[2] for c in candidates[:safe_n]]
+    print(f"[recommendation] E06 cold start top-{top_n}: {result}")
+    return result
+
+
+def get_recommendations_with_fallback(
+    user_id: Any,
+    top_n: int = 5,
+    category: Optional[str] = None,
+) -> List[int]:
+    """
+    E06: Gợi ý CF; nếu cold start (chưa có lịch sử) thì fallback sang cold start.
+    """
+    cf_result = get_recommendations(user_id, top_n)
+    if cf_result:
+        return cf_result
+    print(f"[recommendation] CF cold start user={user_id}, dùng cold start fallback.")
+    return get_cold_start_recommendations(top_n=top_n, category=category)

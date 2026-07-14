@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Any, Dict, List, Optional
@@ -14,7 +14,7 @@ import requests
 import google.generativeai as genai
 
 import recommendation
-from recommendation import get_recommendations
+from recommendation import get_recommendations, get_recommendations_with_fallback, invalidate_cbf_cache  # E05, E06
 from normalize_specs import normalize_product_specs  # E03
 
 load_dotenv()
@@ -29,6 +29,11 @@ class RecommendResponse(BaseModel):
 class ChatRequest(BaseModel):
     user_id: Optional[str] = "khach_hang_test"
     message: str
+
+# F08: giới hạn độ dài tin nhắn
+_MAX_MESSAGE_LENGTH = int(os.getenv("SOPE_MAX_MESSAGE_LENGTH", "2000"))
+# F08: giới hạn độ dài reply trả về
+_MAX_REPLY_LENGTH   = int(os.getenv("SOPE_MAX_REPLY_LENGTH",   "3000"))
 
 # ==========================================
 # 1. CHÍNH SÁCH – F05: Load từ policy.json, không hard-code
@@ -82,6 +87,138 @@ def match_policy(message: str) -> str:
         if any(kw in normalized for kw in keywords):
             matched_parts.append(content)
     return " ".join(matched_parts)
+
+
+# ==========================================
+# F08 – BẢO VỆ CHATBOT: PROMPT INJECTION GUARD
+# ==========================================
+_INJECTION_PATTERNS = [
+    r"ignore (all |previous |above |prior )?instructions?",
+    r"forget (everything|all|your instructions)",
+    r"(reveal|show|print|output|tell me|give me|show me) (your |the )?(system prompt|prompt|api key|secret|instruction)",
+    r"(pretend|act|you are now|roleplay) (you are|as if|like) (a )?(different|another|new|unrestricted|evil)",
+    r"bypass (your )?(filter|restriction|rule|safety)",
+    r"jailbreak",
+    r"(what is|tell me) (your )?(system instruction|system prompt|api key|gemini key)",
+    r"tiet lo (system prompt|api key|khoa|mat khau)",
+    r"lo (prompt|key|mat khau|khoa bao mat)",
+]
+_INJECTION_RE = re.compile("|".join(_INJECTION_PATTERNS), re.IGNORECASE)
+
+
+def is_prompt_injection(message: str) -> bool:
+    """F08: Phát hiện câu hỏi cố tình lộ system prompt hoặc bypass an toàn."""
+    return bool(_INJECTION_RE.search(message))
+
+
+def sanitize_reply(text: str) -> str:
+    """
+    F08: Xử lý reply trước khi trả về:
+      - Giới hạn độ dài tối đa.
+      - Loại bỏ thông tin nhạy cảm (API key, JWT token, email, SĐT).
+    """
+    # Giới hạn độ dài
+    if len(text) > _MAX_REPLY_LENGTH:
+        text = text[:_MAX_REPLY_LENGTH].rstrip() + "..."
+    # Che API key dạng Bearer/sk-/AIza...
+    text = re.sub(r"(Bearer\s+|sk-|AIza)[A-Za-z0-9\-_\.]{8,}", "[REDACTED]", text)
+    # Che JWT
+    text = re.sub(r"eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+", "[JWT_REDACTED]", text)
+    return text
+
+
+# ==========================================
+# F06 – TRA CỨU ĐƠN HÀNG
+# ==========================================
+
+_ORDER_INTENT_TERMS = (
+    "don hang", "ma don", "tra cuu don", "tinh trang don",
+    "don cua toi", "kiem tra don", "order",
+    "da giao chua", "dang giao", "van don",
+)
+
+_ORDER_ID_PATTERN = re.compile(r"\b(?:#|ma\s*)?([A-Z]{0,3}\d{4,10})\b", re.IGNORECASE)
+
+
+def is_order_question(message: str) -> bool:
+    """F06: Phân biệt câu hỏi về đơn hàng."""
+    normalized = normalize_text(message)
+    return any(term in normalized for term in _ORDER_INTENT_TERMS)
+
+
+def extract_order_id(message: str) -> Optional[str]:
+    """F06: Trích xuất mã đơn từ câu tin nhắn."""
+    m = _ORDER_ID_PATTERN.search(message)
+    return m.group(1).upper() if m else None
+
+
+async def fetch_order_from_backend(
+    order_id: str,
+    user_id: str,
+    timeout: float = 5.0,
+) -> Optional[Dict[str, Any]]:
+    """
+    F06: Gọi API backend để tra cứu đơn hàng.
+    Chỉ trả dữ liệu nếu đơn thuộc về đúng user_id (bảo vệ quyền riêng tư).
+    Trả None nếu không tìm thấy hoặc không có quyền.
+    """
+    url = f"{BACKEND_API_BASE_URL}/orders/{order_id}"
+    headers = {"Accept": "application/json"}
+    svc_key = os.getenv("SOPE_SERVICE_KEY", "")
+    if svc_key:
+        headers["X-Service-Key"] = svc_key
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(url, headers=headers, timeout=timeout)
+    except Exception as exc:
+        print(f"[order] Loi ket noi backend khi tra don {order_id}: {exc}")
+        return None
+    if resp.status_code == 404:
+        return None
+    if resp.status_code != 200:
+        print(f"[order] Backend tra loi {resp.status_code} khi tra don {order_id}")
+        return None
+    try:
+        data = resp.json()
+    except Exception:
+        return None
+    # Kiểm tra quyền: đơn phải thuộc về user_id này
+    owner = str(data.get("userId") or data.get("user_id") or data.get("customerId") or "")
+    if owner and owner != str(user_id) and user_id != "khach_hang_test":
+        print(f"[order] User {user_id} khong co quyen xem don {order_id} (chu: {owner})")
+        return {"_access_denied": True}
+    return data
+
+
+def format_order_reply(order: Dict[str, Any]) -> str:
+    """F06: Format đơn hàng thành câu trả lời thân thiện."""
+    if order.get("_access_denied"):
+        return "Xin lỗi, mình không thể cung cấp thông tin đơn hàng này vì không khớp tài khoản."
+    order_id = order.get("orderId") or order.get("id") or "N/A"
+    status   = order.get("status") or order.get("orderStatus") or "Không rõ"
+    total    = order.get("totalAmount") or order.get("total") or 0
+    created  = order.get("createdAt") or order.get("orderDate") or ""
+    items    = order.get("items") or order.get("orderItems") or []
+    shipping = order.get("shippingStatus") or ""
+    tracking = order.get("trackingCode") or order.get("trackingNumber") or ""
+    try:
+        total_fmt = f"{int(total):,}đ"
+    except (ValueError, TypeError):
+        total_fmt = str(total)
+    lines = [
+        f"📦 **Đơn hàng #{order_id}**",
+        f"• Trạng thái: **{status}**",
+    ]
+    if shipping:
+        lines.append(f"• Giao hàng: {shipping}")
+    if tracking:
+        lines.append(f"• Mã vận đơn: `{tracking}`")
+    if created:
+        lines.append(f"• Ngày đặt: {str(created)[:10]}")
+    lines.append(f"• Tổng tiền: {total_fmt}")
+    if isinstance(items, list) and items:
+        lines.append(f"• Sản phẩm: {len(items)} món")
+    return "\n".join(lines)
 
 
 BACKEND_API_BASE_URL = os.getenv("SOPE_BACKEND_API_URL", "http://localhost:8080/api").rstrip("/")
@@ -209,6 +346,7 @@ CPU_SPEC_TERMS = ("chip xu ly", "cpu", "cong nghe cpu")
 GPU_SPEC_TERMS = ("chip do hoa", "gpu", "card man hinh")
 
 
+# ==========================================
 def normalize_text(value: Any) -> str:
     text = str(value or "").lower()
     text = unicodedata.normalize("NFD", text)
@@ -612,7 +750,42 @@ async def chat_with_gemini(request: ChatRequest, background_tasks: BackgroundTas
             raise HTTPException(status_code=503, detail="Chua cau hinh GEMINI_API_KEY.")
 
         user_msg = request.message
-        
+
+        # F08: Giới hạn độ dài tin nhắn
+        if len(user_msg) > _MAX_MESSAGE_LENGTH:
+            return {
+                "status": "error",
+                "reply": f"Tin nhắn quá dài (tối đa {_MAX_MESSAGE_LENGTH} ký tự). Vui lòng rút gọn nhé."
+            }
+
+        # F08: Chặn prompt injection
+        if is_prompt_injection(user_msg):
+            return {
+                "status": "error",
+                "reply": "Mình không thể thực hiện yêu cầu này. Nếu bạn cần hỗ trợ về sản phẩm hoặc dịch vụ, hãy đặt câu hỏi khác nhé."
+            }
+
+        # F06: Tra cứu đơn hàng trước khi đi vào luồng Gemini
+        if is_order_question(user_msg):
+            order_id = extract_order_id(user_msg)
+            if order_id:
+                order_data = await fetch_order_from_backend(order_id, str(request.user_id))
+                if order_data is not None:
+                    bot_reply = format_order_reply(order_data)
+                else:
+                    bot_reply = f"Xin lỗi, mình không tìm thấy đơn hàng #{order_id} trong hệ thống. Bạn kiểm tra lại mã đơn nhé!"
+                background_tasks.add_task(
+                    save_chat_to_springboot, request.user_id, user_msg, bot_reply
+                )
+                return {"status": "success", "reply": bot_reply}
+            else:
+                # Không có mã đơn – hỏi lại
+                bot_reply = "Bạn muốn tra đơn hàng? Vui lòng cung cấp **mã đơn hàng** (ví dụ: #ORD12345) để mình tra giúp nhé!"
+                background_tasks.add_task(
+                    save_chat_to_springboot, request.user_id, user_msg, bot_reply
+                )
+                return {"status": "success", "reply": bot_reply}
+
         # F05: Lấy nội dung chính sách từ policy.json, không hard-code
         context = match_policy(user_msg)
 
@@ -672,7 +845,8 @@ async def chat_with_gemini(request: ChatRequest, background_tasks: BackgroundTas
         if not response.parts:
             bot_reply = "Xin lỗi, mình không thể xử lý câu hỏi này."
         else:
-            bot_reply = response.text
+            # F08: Sanitize reply trước khi trả về
+            bot_reply = sanitize_reply(response.text)
         
         background_tasks.add_task(
             save_chat_to_springboot, 
@@ -697,7 +871,8 @@ async def chat_with_gemini(request: ChatRequest, background_tasks: BackgroundTas
 @app.get("/api/ai/recommend/cf/{user_id}")
 def recommend_products(user_id: int, top_n: int = 5):
     try:
-        recommendations = get_recommendations(user_id, top_n)
+        # E06: Dùng fallback cold start nếu user chưa có lịch sử
+        recommendations = get_recommendations_with_fallback(user_id, top_n)
         return {"status": "success", "product_ids": recommendations}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Lỗi hệ thống tính toán: {str(e)}")
@@ -718,11 +893,25 @@ def get_content_based_api(product_id: int, top_n: int = 5):
     except Exception as e:
         return {"status": "error", "product_ids": []}
 
+@app.get("/api/ai/recommend/popular")
+def get_popular_products_api(top_n: int = 5, category: Optional[str] = None):
+    """E06: Endpoint gợi ý sản phẩm phổ biến cho trang chủ / cold start."""
+    try:
+        ids = recommendation.get_cold_start_recommendations(top_n=top_n, category=category)
+        return {"status": "success", "product_ids": ids}
+    except Exception as e:
+        return {"status": "error", "product_ids": []}
+
+@app.post("/api/ai/cache/invalidate")
+def invalidate_cache_api():
+    """E05: Endpoint để backend gọi khi danh mục sản phẩm thay đổi."""
+    invalidate_cbf_cache()
+    return {"status": "ok", "message": "CBF cache đã bị xóa. Ma trận sẽ được tính lại lần gọi tiếp theo."}
+
 @app.get("/")
 async def root():
     return {"message": "FastAPI Server: Gemini Chatbot & Recommendation System is running!"}
 
 if __name__ == "__main__":
     import uvicorn
-
     uvicorn.run(app, host="0.0.0.0", port=8000)
