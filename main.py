@@ -952,3 +952,4 @@ if __name__ == "__main__":
 #H08 – Trang quản lý đánh giá và chat
 #F10 – Chuyển sang nhân viên hỗ trợ
 #E09 – Đánh giá chất lượng gợi ý
+#E10 – Kiểm tra tốc độ và lỗi AI
