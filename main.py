@@ -945,3 +945,4 @@ if __name__ == "__main__":
 
 #Sửa lỗi build và dependency
 #F02 – Đưa cấu hình chatbot ra file
+#J04 – Deploy chatbot
