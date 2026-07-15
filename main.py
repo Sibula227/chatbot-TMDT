@@ -950,3 +950,4 @@ if __name__ == "__main__":
 #F07 – Hiển thị sản phẩm trong chatbot
 #F09 – Lưu lịch sử trò chuyện
 #H08 – Trang quản lý đánh giá và chat
+#F10 – Chuyển sang nhân viên hỗ trợ
