@@ -14,7 +14,12 @@ import requests
 import google.generativeai as genai
 
 import recommendation
-from recommendation import get_recommendations, get_recommendations_with_fallback, invalidate_cbf_cache  # E05, E06
+from recommendation import (
+    get_recommendations,
+    get_recommendations_with_fallback,
+    invalidate_cbf_cache,             # E05
+    get_personalized_recommendations, # E08
+)
 from normalize_specs import normalize_product_specs  # E03
 
 load_dotenv()
@@ -907,6 +912,24 @@ def invalidate_cache_api():
     """E05: Endpoint để backend gọi khi danh mục sản phẩm thay đổi."""
     invalidate_cbf_cache()
     return {"status": "ok", "message": "CBF cache đã bị xóa. Ma trận sẽ được tính lại lần gọi tiếp theo."}
+
+@app.get("/api/ai/recommend/personalized/{user_id}")
+def get_personalized_api(user_id: int, top_n: int = 5):
+    """
+    E08: Gợi ý cá nhân hóa theo sở thích người dùng.
+    Trả list [{product_id, score, reason}].
+    Fallback cold start nếu user chưa có lịch sử.
+    """
+    try:
+        results = get_personalized_recommendations(user_id, top_n)
+        return {
+            "status": "success",
+            "user_id": user_id,
+            "recommendations": results,
+        }
+    except Exception as e:
+        print(f"[E08] Lỗi personalized endpoint: {e}")
+        return {"status": "error", "recommendations": []}
 
 @app.get("/")
 async def root():

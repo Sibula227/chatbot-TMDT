@@ -1,6 +1,6 @@
 """
 recommendation.py – SOPE Chatbot Recommendation Module
-Cập nhật: 2026-07-14
+Cập nhật: 2026-07-15
 Tasks:
   E01 – Không kết nối MySQL trực tiếp; lấy dữ liệu qua REST API nội bộ
          với service key và timeout.
@@ -11,6 +11,8 @@ Tasks:
          không gợi ý chính sản phẩm đang xem, giới hạn số lượng.
   E05 – Cache ma trận TF-IDF in-memory; chỉ tính lại khi danh mục thay đổi.
   E06 – Cold start: gợi ý sản phẩm phổ biến / đánh giá cao khi chưa có lịch sử.
+  E08 – Gợi ý cá nhân hóa: từ lịch sử hành vi, ưu tiên sản phẩm phù hợp sở thích,
+         tránh lặp và đa dạng hóa kết quả, ghi lý do gợi ý.
 """
 
 import os
@@ -671,3 +673,320 @@ def get_recommendations_with_fallback(
         return cf_result
     print(f"[recommendation] CF cold start user={user_id}, dùng cold start fallback.")
     return get_cold_start_recommendations(top_n=top_n, category=category)
+
+
+# ============================================================
+# E08 – GỢI Ý CÁ NHÂN HÓA THEO SỞ THÍCH NGƯỜI DÙNG
+# ============================================================
+
+# ---- Cấu hình E08 ----
+_E08_MIN_RATING   = float(os.getenv("SOPE_E08_MIN_RATING",   "3.0"))  # rating tối thiểu để tính sở thích
+_E08_MAX_DIVERSITY= int  (os.getenv("SOPE_E08_MAX_DIVERSITY", "2"))    # tối đa sp cA1ng hãng trong kết quả
+_E08_SEEN_PENALTY = float(os.getenv("SOPE_E08_SEEN_PENALTY",  "0.5"))  # hệ số trừ điểm sp đã xem
+
+
+def _fetch_user_history(user_id: Any) -> List[Dict[str, Any]]:
+    """
+    E08: Lấy lịch sử tương tác của một user cụ thể từ backend.
+    Endpoint: GET /api/reviews?userId=<user_id>
+    Fallback: GET /api/interactions?userId=<user_id>
+    Trả list dict [{product_id, rating, category, brand, price}]
+    """
+    endpoints = [
+        f"{_BACKEND_BASE}/reviews",
+        f"{_BACKEND_BASE}/interactions",
+    ]
+    for url in endpoints:
+        try:
+            resp = requests.get(
+                url,
+                params={"userId": user_id, "size": 200},
+                headers=_service_headers(),
+                timeout=_API_TIMEOUT,
+            )
+        except requests.exceptions.RequestException as exc:
+            print(f"[E08] Lỗi kết nối {url}: {exc}")
+            continue
+
+        if resp.status_code not in (200,):
+            continue
+
+        payload = resp.json()
+        items = payload.get("content", payload) if isinstance(payload, dict) else payload
+        if not isinstance(items, list) or not items:
+            continue
+
+        result = []
+        for item in items:
+            uid = (
+                item.get("userId") or item.get("user_id")
+                or item.get("reviewerName") or item.get("reviewer_name")
+            )
+            if str(uid) != str(user_id):
+                continue
+            pid = item.get("productId") or item.get("product_id")
+            rating = float(
+                item.get("ratingStars") or item.get("rating_stars")
+                or item.get("rating") or 0
+            )
+            result.append({
+                "product_id": int(pid) if pid is not None else None,
+                "rating":     rating,
+                "category":   item.get("category") or "",
+                "brand":      item.get("brand") or item.get("manufacturer") or "",
+                "price":      item.get("price") or 0,
+            })
+        if result:
+            print(f"[E08] Lấy được {len(result)} interaction của user={user_id} từ {url}")
+            return result
+
+    print(f"[E08] Không có lịch sử tương tác cho user={user_id}")
+    return []
+
+
+def _build_user_preference(history: List[Dict[str, Any]], products_map: Dict[int, Dict]) -> Dict[str, Any]:
+    """
+    E08: Phân tích lịch sử để rút ra sở thích của user:
+      - Danh mục ưa thích (top categories theo weighted rating)
+      - Hãng ưa thích (top brands)
+      - Khoảng giá thường mua
+      - Sản phẩm đã tương tác (cho trừ điểm / loại trừ)
+    """
+    cat_score:   Dict[str, float] = {}
+    brand_score: Dict[str, float] = {}
+    prices: List[float] = []
+    seen_ids: set = set()
+
+    for h in history:
+        pid = h.get("product_id")
+        rating = h.get("rating", 0)
+        if pid is None:
+            continue
+        seen_ids.add(pid)
+
+        # Lấy thêm thông tin từ products_map nếu có
+        pdata = products_map.get(pid, {})
+        cat   = (h.get("category") or pdata.get("category") or "").lower().strip()
+        brand = (h.get("brand") or pdata.get("brand") or pdata.get("manufacturer") or "").lower().strip()
+        price = float(h.get("price") or pdata.get("price") or 0)
+
+        # Chỉ tính sở thích từ những interaction có rating đủ cao
+        if rating >= _E08_MIN_RATING:
+            if cat:
+                cat_score[cat]   = cat_score.get(cat, 0) + rating
+            if brand:
+                brand_score[brand] = brand_score.get(brand, 0) + rating
+            if price > 0:
+                prices.append(price)
+
+    # Tóm tắt sở thích
+    top_cats   = sorted(cat_score,   key=cat_score.get,   reverse=True)[:3]
+    top_brands = sorted(brand_score, key=brand_score.get, reverse=True)[:3]
+    price_min  = min(prices) * 0.7 if prices else 0
+    price_max  = max(prices) * 1.4 if prices else float("inf")
+
+    pref = {
+        "top_categories": top_cats,
+        "top_brands":     top_brands,
+        "price_min":      price_min,
+        "price_max":      price_max,
+        "seen_ids":       seen_ids,
+        "cat_score":      cat_score,
+        "brand_score":    brand_score,
+    }
+    print(f"[E08] Sở thích user: cat={top_cats}, brand={top_brands}, giá=[{price_min:.0f},{price_max:.0f}]")
+    return pref
+
+
+def _score_product_for_user(
+    product: Dict[str, Any],
+    pref: Dict[str, Any],
+) -> float:
+    """
+    E08: Tính điểm phù hợp sở thích cho một sản phẩm.
+    Thành phần:
+      +3.0  nếu danh mục khớp top1, +2.0 top2, +1.0 top3
+      +2.0  nếu hãng khớp top1, +1.5 top2, +1.0 top3
+      +1.0  nếu giá trong khoảng thường mua
+      -SEEN_PENALTY nếu đã tương tác (không loại bỏ hẳn nhưng giảm ưu tiên)
+    """
+    score = 0.0
+    pid   = int(product.get("id", -1))
+    cat   = str(product.get("category") or "").lower().strip()
+    brand = str(product.get("brand") or product.get("manufacturer") or "").lower().strip()
+    price = float(product.get("price") or 0)
+
+    # Danh mục
+    top_cats = pref.get("top_categories", [])
+    for i, c in enumerate(top_cats):
+        if cat == c:
+            score += 3.0 - i * 1.0  # top1: +3, top2: +2, top3: +1
+            break
+
+    # Hãng
+    top_brands = pref.get("top_brands", [])
+    for i, b in enumerate(top_brands):
+        if brand == b:
+            score += 2.0 - i * 0.5  # top1: +2, top2: +1.5, top3: +1
+            break
+
+    # Khoảng giá
+    p_min = pref.get("price_min", 0)
+    p_max = pref.get("price_max", float("inf"))
+    if price > 0 and p_min <= price <= p_max:
+        score += 1.0
+
+    # Giảm điểm nếu đã tương tác trước
+    if pid in pref.get("seen_ids", set()):
+        score -= _E08_SEEN_PENALTY
+
+    return score
+
+
+def _build_reason(product: Dict[str, Any], pref: Dict[str, Any]) -> str:
+    """
+    E08: Sinh lý do gợi ý ngắn gọn, thân thiện.
+    """
+    reasons = []
+    cat   = str(product.get("category") or "").lower().strip()
+    brand = str(product.get("brand") or product.get("manufacturer") or "").strip()
+    name  = str(product.get("name") or "").strip()
+
+    top_cats   = pref.get("top_categories", [])
+    top_brands = pref.get("top_brands", [])
+
+    if cat and cat in top_cats:
+        reasons.append(f"phù hợp sở thích {cat} của bạn")
+    if brand and brand.lower() in top_brands:
+        reasons.append(f"cùng hãng {brand} bạn ưa thích")
+
+    price = float(product.get("price") or 0)
+    p_min = pref.get("price_min", 0)
+    p_max = pref.get("price_max", float("inf"))
+    if price > 0 and p_min <= price <= p_max:
+        reasons.append("trong tầm giá bạn thường chọn")
+
+    avg = float(product.get("averageRating") or product.get("avgRating") or 0)
+    if avg >= 4.5:
+        reasons.append(f"với {avg:.1f}★ từ khách hàng")
+
+    if not reasons:
+        reasons.append("phổ biến trên SOPE")
+
+    return "Gợi ý vì " + ", ".join(reasons)
+
+
+def _apply_diversity(
+    scored: List[tuple],          # [(score, product_dict), ...] đã sắp xếp
+    max_per_brand: int = 2,
+) -> List[tuple]:
+    """
+    E08: Giới hạn số sản phẩm cùng hãng trong kết quả (tránh gợi ý 5 iPhone liên tiếp).
+    Vẫn giữ thứ tự ưu tiên; chỉ loại khi vượt ngưỡng max_per_brand.
+    """
+    brand_count: Dict[str, int] = {}
+    result = []
+    for score, p in scored:
+        brand = str(p.get("brand") or p.get("manufacturer") or "unknown").lower().strip()
+        cnt = brand_count.get(brand, 0)
+        if cnt < max_per_brand:
+            result.append((score, p))
+            brand_count[brand] = cnt + 1
+    return result
+
+
+def get_personalized_recommendations(
+    user_id: Any,
+    top_n: int = 5,
+) -> List[Dict[str, Any]]:
+    """
+    E08: Gợi ý cá nhân hóa dựa trên sở thích người dùng.
+
+    Quy trình:
+      1. Lấy lịch sử tương tác của user (_fetch_user_history).
+      2. Phân tích sở thích: danh mục, hãng, khoảng giá (_build_user_preference).
+      3. Score từng sản phẩm trong catalog theo mức độ khớp sở thích.
+      4. Áp dụng diversity: giới hạn số cùng hãng.
+      5. Sinh lý do gợi ý cho từng sản phẩm.
+      6. Fallback sang cold start nếu không có lịch sử.
+
+    Trả list dict:
+      [{"product_id": int, "score": float, "reason": str}, ...]
+    """
+    # Bước 1: Lấy lịch sử
+    history = _fetch_user_history(user_id)
+
+    # Bước 2: Lấy catalog sản phẩm (dùng cache nếu có)
+    products = _cbf_cache.get("raw_products") or fetch_all_products()
+    if not products:
+        print("[E08] Không lấy được sản phẩm từ backend.")
+        return []
+
+    products_map: Dict[int, Dict] = {
+        int(p["id"]): p for p in products if p.get("id") is not None
+    }
+
+    # Fallback cold start nếu không có lịch sử
+    if not history:
+        print(f"[E08] Không có lịch sử user={user_id} → cold start.")
+        cold_ids = get_cold_start_recommendations(top_n=top_n)
+        return [
+            {
+                "product_id": pid,
+                "score":      0.0,
+                "reason":     "Gợi ý vì phổ biến trên SOPE (chưa có lịch sử)",
+            }
+            for pid in cold_ids
+        ]
+
+    # Bước 3: Phân tích sở thích
+    pref = _build_user_preference(history, products_map)
+
+    # Bước 4: Score từng sản phẩm
+    scored: List[tuple] = []
+    for p in products:
+        pid = p.get("id")
+        if pid is None:
+            continue
+        pid = int(pid)
+
+        # Kiểm tra đang bán
+        status = str(p.get("status") or "").lower()
+        if status and status not in ("", "active", "selling", "available", "published", "1"):
+            continue
+        if p.get("available") is not None and not p["available"]:
+            continue
+
+        # Kiểm tra còn hàng
+        stock = None
+        for sf in ("stockQuantity", "stock", "quantity"):
+            v = p.get(sf)
+            if v is not None:
+                stock = v
+                break
+        if stock is not None:
+            try:
+                if int(stock) <= 0:
+                    continue
+            except (ValueError, TypeError):
+                pass
+
+        s = _score_product_for_user(p, pref)
+        scored.append((s, p))
+
+    # Sắp xếp theo điểm giảm dần
+    scored.sort(key=lambda x: -x[0])
+
+    # Bước 5: Diversity – giới hạn cùng hãng
+    diverse = _apply_diversity(scored, max_per_brand=_E08_MAX_DIVERSITY)
+
+    # Bước 6: Lấy top_n, sinh lý do
+    safe_n = min(top_n, _MAX_RECOMMENDATIONS)
+    result = []
+    for score, p in diverse[:safe_n]:
+        pid    = int(p.get("id"))
+        reason = _build_reason(p, pref)
+        result.append({"product_id": pid, "score": round(score, 3), "reason": reason})
+        print(f"[E08] #{pid} score={score:.2f} | {reason}")
+
+    return result
