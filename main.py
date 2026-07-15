@@ -933,8 +933,25 @@ def get_personalized_api(user_id: int, top_n: int = 5):
 
 @app.get("/")
 async def root():
+
+    return {"message": "FastAPI & Gemini Server is running with Mock DB!"}
+
+
     return {"message": "FastAPI Server: Gemini Chatbot & Recommendation System is running!"}
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+#Sửa lỗi build và dependency
+#F02 – Đưa cấu hình chatbot ra file
+#J04 – Deploy chatbot
+#F03 – Cho frontend gọi chatbot qua backend
+#F07 – Hiển thị sản phẩm trong chatbot
+#F09 – Lưu lịch sử trò chuyện
+#H08 – Trang quản lý đánh giá và chat
+#F10 – Chuyển sang nhân viên hỗ trợ
+#E09 – Đánh giá chất lượng gợi ý
+#E10 – Kiểm tra tốc độ và lỗi AI
+#I08 – Sửa khả năng truy cập
+#I06 – Thông báo trạng thái đơn
