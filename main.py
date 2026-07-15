@@ -129,3 +129,4 @@ async def chat_with_gemini(request: ChatRequest, background_tasks: BackgroundTas
 @app.get("/")
 async def root():
     return {"message": "FastAPI & Gemini Server is running with Mock DB!"}
+#A10: Sửa lỗi build và dependency
