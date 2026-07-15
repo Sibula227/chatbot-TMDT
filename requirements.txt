@@ -1,0 +1,101 @@
+# ============================================================
+# requirements.txt – chatbot-TMDT (SOPE)
+# Cập nhật: 2026-07-12 | Task F01
+# Chỉ giữ package đang dùng thực tế trong main.py và recommendation.py
+# ============================================================
+
+# --- Web framework & server ---
+fastapi==0.136.3
+starlette==1.1.0
+uvicorn==0.48.0
+websockets==15.0.1
+
+# --- Pydantic / validation ---
+pydantic==2.11.9
+pydantic_core==2.33.2
+annotated-types==0.7.0
+typing-inspection==0.4.2
+typing_extensions==4.15.0
+
+# --- HTTP clients (dùng trong main.py: httpx async, requests sync) ---
+httpx==0.28.1
+httpcore==1.0.9
+h11==0.16.0
+requests==2.32.5
+urllib3==2.5.0
+certifi==2025.8.3
+charset-normalizer==3.4.3
+idna==3.10
+
+# --- Gemini / Google AI SDK (google.generativeai đang dùng trong main.py) ---
+google-generativeai==0.8.6
+google-ai-generativelanguage==0.6.15
+google-api-core==2.30.3
+google-api-python-client==2.196.0
+google-auth==2.41.1
+google-auth-httplib2==0.4.0
+googleapis-common-protos==1.75.0
+proto-plus==1.28.0
+protobuf==5.29.6
+grpcio==1.80.0
+grpcio-status==1.71.2
+httplib2==0.31.2
+uritemplate==4.2.0
+pyasn1==0.6.1
+pyasn1_modules==0.4.2
+rsa==4.9.1
+cachetools==6.2.0
+
+# --- Data science / ML (dùng trong recommendation.py) ---
+numpy==2.3.3
+pandas==2.3.2
+scipy==1.17.1
+scikit-learn         # TF-IDF và cosine_similarity trong recommendation.py
+
+# --- Async / concurrency ---
+anyio==4.11.0
+sniffio==1.3.1
+
+# --- Env / config ---
+python-dotenv==1.2.2
+
+# --- Utilities ---
+click==8.4.1
+colorama==0.4.6
+tqdm==4.67.1
+tenacity==9.1.2
+packaging==24.1
+six==1.17.0
+python-dateutil==2.9.0.post0
+pytz==2025.2
+tzdata==2024.2
+setuptools==75.1.0
+
+# --- Template engine (Starlette dùng nội bộ) ---
+Jinja2==3.1.6
+MarkupSafe==3.0.3
+
+# --- Misc phụ thuộc gián tiếp ---
+distro==1.9.0
+jiter==0.11.0
+filelock==3.29.0
+fsspec==2026.4.0
+networkx==3.6.1
+mpmath==1.3.0
+sympy==1.14.0
+
+# ============================================================
+# Các package ĐÃ XÓA (F01):
+#   - pymysql          → E01: thay bằng REST API
+#   - torch, torchvision → chưa dùng, quá nặng
+#   - openai           → dùng Gemini, không cần OpenAI SDK
+#   - google-genai     → trùng với google-generativeai
+#   - Django, asgiref, sqlparse → framework khác
+#   - matplotlib + deps (contourpy, cycler, fonttools, kiwisolver, pyparsing) → vẽ đồ thị, không dùng
+#   - opencv-python    → xử lý ảnh, không dùng
+#   - pygame           → game library
+#   - customtkinter, CTkMessagebox, darkdetect → GUI desktop
+#   - pyinstaller, pyinstaller-hooks-contrib, altgraph, pefile, pywin32-ctypes → đóng gói exe
+#   - more_function    → không rõ nguồn, không thấy import
+#   - annotated-doc    → không dùng
+# ============================================================
