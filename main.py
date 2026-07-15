@@ -944,3 +944,4 @@ if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
 
 #Sửa lỗi build và dependency
+#F02 – Đưa cấu hình chatbot ra file
