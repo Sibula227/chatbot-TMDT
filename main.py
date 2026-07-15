@@ -954,3 +954,4 @@ if __name__ == "__main__":
 #E09 – Đánh giá chất lượng gợi ý
 #E10 – Kiểm tra tốc độ và lỗi AI
 #I08 – Sửa khả năng truy cập
+#I06 – Thông báo trạng thái đơn
