@@ -947,3 +947,4 @@ if __name__ == "__main__":
 #F02 – Đưa cấu hình chatbot ra file
 #J04 – Deploy chatbot
 #F03 – Cho frontend gọi chatbot qua backend
+#F07 – Hiển thị sản phẩm trong chatbot
