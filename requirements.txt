@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # ============================================================
 # requirements.txt – chatbot-TMDT (SOPE)
 # Cập nhật: 2026-07-12 | Task F01

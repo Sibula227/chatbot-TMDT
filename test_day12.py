@@ -6,6 +6,7 @@ Khong can backend dang chay de test E02 va F01.
 
 import sys
 import os
+from pathlib import Path
 
 # Fix encoding cho terminal Windows
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -35,12 +36,22 @@ except ImportError as e:
 # -------------------------------------------------------
 # TEST 2: Kiem tra KHONG import pymysql (E01)
 # -------------------------------------------------------
-print("\n[TEST 2] Kiem tra khong con pymysql (E01)...")
-try:
-    import pymysql
-    print("  [FAIL] CANH BAO: pymysql van import duoc - can xoa khoi requirements.txt")
-except ImportError:
-    print("  [PASS] pymysql khong con: OK (dung yeu cau E01)")
+print("\n[TEST 2] Kiem tra project khong con dung pymysql (E01)...")
+project_dir = Path(__file__).resolve().parent
+requirements = (project_dir / "requirements.txt").read_text(encoding="utf-8").lower()
+active_requirements = [
+    line.strip() for line in requirements.splitlines()
+    if line.strip() and not line.lstrip().startswith("#")
+]
+python_sources = "\n".join(
+    path.read_text(encoding="utf-8").lower()
+    for path in project_dir.glob("*.py")
+    if path.name != Path(__file__).name
+)
+if any(line.startswith("pymysql") for line in active_requirements) or "import pymysql" in python_sources:
+    print("  [FAIL] Project van khai bao hoac import pymysql")
+else:
+    print("  [PASS] requirements va ma nguon khong con dung pymysql")
 
 # -------------------------------------------------------
 # TEST 3: build_product_description – khong can backend (E02)

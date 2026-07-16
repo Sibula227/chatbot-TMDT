@@ -407,3 +407,14 @@ pip install -r requirements.txt
 - **Khong con trong code:** `pymysql`, password MySQL hard-code.
 - **Anh huong backend:** Backend can co `GET /api/reviews`; neu chua co, CF tra list rong (graceful fallback).
 - **Viec can lam tiep (ngay 13/07):** E03, E04, F04, F05.
+
+## Cập nhật 2026-07-16 - Tích hợp Chatbot hoàn chỉnh
+
+- Yêu cầu: Chatbot chạy FastAPI/Gemini, chỉ lấy sản phẩm qua Backend, có health/timeout/env và sẵn sàng local/deploy.
+- Đã sửa: `main.py`, `requirements.txt`, `test_day12.py`, README, gitignore; thêm `.env.example` và Dockerfile.
+- Thay đổi: history gửi `X-Chatbot-Secret`; timeout/cache/port lấy từ env; log và response không lộ secret/stack trace; health báo trạng thái Gemini; không dùng MySQL trực tiếp.
+- Môi trường: đã tạo `.venv` Python 3.12 và cài đủ requirements; thêm khai báo UTF-8 để pip Windows đọc được file.
+- Script local ưu tiên `.venv\Scripts\python.exe`; health PowerShell dùng `127.0.0.1` để không timeout qua IPv6 localhost.
+- Kiểm tra: `test_day12.py` đến `test_day15.py` chạy bằng Python trong `.venv`, exit 0 và không có marker FAIL; `/health` 200; Backend gọi `/api/chat` thành công khoảng 14 giây; reply khớp 7 tên laptop trong catalog Backend.
+- Lỗi/lưu ý: `google-generativeai` phát cảnh báo đã deprecated; hiện vẫn hoạt động, nên lên kế hoạch migrate sang `google-genai` ở lần riêng để tránh đổi API ngoài phạm vi.
+- Việc tiếp theo: giữ `SOPE_BACKEND_API_URL` dạng có hậu tố `/api`; `SOPE_SERVICE_KEY` phải khớp `CHATBOT_SECRET` của Backend khi deploy.

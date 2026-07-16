@@ -737,13 +737,20 @@ async def save_chat_to_springboot(user_id: str, user_message: str, bot_reply: st
         "userMessage": user_message,
         "botReply": bot_reply
     }
+    service_key = os.getenv("SOPE_SERVICE_KEY", "")
+    headers = {"X-Chatbot-Secret": service_key} if service_key else {}
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.post(SPRING_BOOT_API_URL, json=payload, timeout=5.0)
+            response = await client.post(
+                SPRING_BOOT_API_URL,
+                json=payload,
+                headers=headers,
+                timeout=float(os.getenv("SOPE_API_TIMEOUT", "10")),
+            )
             if response.status_code != 200:
-                print(f"Lỗi khi lưu về Spring Boot: {response.text}")
-    except Exception as e:
-        print(f"Không thể kết nối đến Spring Boot: {e}")
+                print(f"Lỗi khi lưu về Spring Boot: HTTP {response.status_code}")
+    except Exception as exc:
+        print(f"Không thể kết nối đến Spring Boot: {type(exc).__name__}")
 
 # ==========================================
 # 4. ENDPOINT CHATBOT (GEMINI + BACKEND PRODUCT RAG)
@@ -866,8 +873,8 @@ async def chat_with_gemini(request: ChatRequest, background_tasks: BackgroundTas
         }
     except HTTPException:
         raise
-    except Exception as e:
-        print(f"======== CHI TIẾT LỖI TỪ GEMINI ======== \n{str(e)}")
+    except Exception as exc:
+        print(f"Gemini request failed: {type(exc).__name__}")
         raise HTTPException(status_code=500, detail="Đã xảy ra lỗi kết nối với Gemini API.")
 
 # ==========================================
@@ -879,8 +886,9 @@ def recommend_products(user_id: int, top_n: int = 5):
         # E06: Dùng fallback cold start nếu user chưa có lịch sử
         recommendations = get_recommendations_with_fallback(user_id, top_n)
         return {"status": "success", "product_ids": recommendations}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Lỗi hệ thống tính toán: {str(e)}")
+    except Exception as exc:
+        print(f"Recommendation request failed: {type(exc).__name__}")
+        raise HTTPException(status_code=500, detail="Lỗi hệ thống tính toán gợi ý.")
 
 @app.get("/api/ai/recommend/similar/{product_id}", response_model=RecommendResponse)
 def get_similar_products_api(product_id: int, top_n: int = 5):
@@ -933,15 +941,19 @@ def get_personalized_api(user_id: int, top_n: int = 5):
 
 @app.get("/")
 async def root():
+    return {"message": "SOPE chatbot service is running", "health": "/health"}
 
-    return {"message": "FastAPI & Gemini Server is running with Mock DB!"}
-
-
-    return {"message": "FastAPI Server: Gemini Chatbot & Recommendation System is running!"}
+@app.get("/health")
+async def health():
+    return {
+        "status": "UP",
+        "geminiConfigured": bool(api_key),
+        "backendUrlConfigured": bool(BACKEND_API_BASE_URL),
+    }
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
 
 #Sửa lỗi build và dependency
 #F02 – Đưa cấu hình chatbot ra file
