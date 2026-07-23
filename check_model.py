@@ -1,11 +1,17 @@
-import google.generativeai as genai
 import os
+
+from google import genai
 from dotenv import load_dotenv
 
 load_dotenv()
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+api_key = os.getenv("GEMINI_API_KEY")
+if not api_key:
+    raise SystemExit("Thiếu GEMINI_API_KEY.")
 
-print("Các model hỗ trợ chat mà API Key của bạn có thể dùng:")
-for m in genai.list_models():
-    if 'generateContent' in m.supported_generation_methods:
-        print(f"- {m.name}")
+client = genai.Client(api_key=api_key)
+try:
+    print("Các model mà API Key của bạn có thể dùng:")
+    for model in client.models.list():
+        print(f"- {model.name}")
+finally:
+    client.close()

@@ -1,5 +1,19 @@
 # CONTEXT.md - Bộ nhớ riêng cho chatbot-TMDT
 
+## Cập nhật 2026-07-23 – Chuẩn bị deploy chatbot
+
+- `Dockerfile` chuyển sang Python 3.12 slim, chạy non-root, chỉ copy source cần thiết và có healthcheck `/health`; `.dockerignore` mới loại `.env`, cache và test khỏi image.
+- Thay SDK legacy đã hết hỗ trợ `google-generativeai` bằng `google-genai==2.13.0`; luồng async dùng `client.aio.models.generate_content` và giữ nguyên model `gemini-2.5-flash`/response contract.
+- Cập nhật dependency tương thích (`pydantic`, `pydantic_core`, `google-auth`, pin `scikit-learn`) và bỏ các dependency Google/ML cũ không còn dùng; pip resolver dry-run pass.
+- Full-stack Compose chỉ expose chatbot trong private network; backend nội bộ là `http://backend:8080/api`, secret dịch vụ dùng chung `CHATBOT_SECRET`.
+- Kiểm tra: `test_day12.py` đến `test_day15.py` đều pass, AST parse pass, async Gemini mock pass, `/health` local trả 200 với Gemini/backend configured và query sản phẩm thật qua Spring có reply/link sản phẩm.
+
+## Cập nhật 2026-07-23 – Ranh giới dữ liệu đơn hàng cá nhân
+
+- FastAPI/Gemini vẫn phụ trách hội thoại và gợi ý sản phẩm từ catalog backend.
+- Câu hỏi trạng thái đơn cá nhân được Spring Boot chặn và trả lời trước khi proxy tới FastAPI.
+- Không thêm quyền truy cập bảng đơn hàng, JWT khách hàng, địa chỉ, số điện thoại hoặc lịch sử mua hàng cho module Python; đây là ranh giới bảo mật có chủ ý.
+
 ## 1. Vai trò của chatbot-TMDT
 
 `chatbot-TMDT/` là module chatbot thương mại điện tử của dự án SOPE, viết bằng Python.

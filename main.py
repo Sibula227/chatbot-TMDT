@@ -11,7 +11,8 @@ import unicodedata
 from dotenv import load_dotenv
 
 import requests
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 import recommendation
 from recommendation import (
@@ -712,8 +713,9 @@ def product_to_prompt_item(product: Dict[str, Any]) -> Dict[str, Any]:
 # ==========================================
 api_key = os.getenv("GEMINI_API_KEY")
 if api_key:
-    genai.configure(api_key=api_key)
+    gemini_client = genai.Client(api_key=api_key)
 else:
+    gemini_client = None
     print("Chua tim thay GEMINI_API_KEY. Chat Gemini se tam dung, cac endpoint recommendation van chay.")
 
 app = FastAPI(title="Gemini RAG Chatbot API")
@@ -847,14 +849,15 @@ async def chat_with_gemini(request: ChatRequest, background_tasks: BackgroundTas
             - Khi so sánh, chỉ dùng dữ liệu trong JSON; thiếu thì nói rõ.
             - Trả lời súc tích, đi thẳng vào vấn đề."""
 
-        model = genai.GenerativeModel(
-            'gemini-2.5-flash',
-            system_instruction=system_instruction
+        response = await gemini_client.aio.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=user_msg,
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+            ),
         )
 
-        response = await model.generate_content_async(user_msg)
-        
-        if not response.parts:
+        if not response.text:
             bot_reply = "Xin lỗi, mình không thể xử lý câu hỏi này."
         else:
             # F08: Sanitize reply trước khi trả về
