@@ -1,5 +1,28 @@
 # CONTEXT.md - Bộ nhớ riêng cho chatbot-TMDT
 
+## Cập nhật 2026-07-24 – CBF concurrency, catalog nhẹ và timeout
+
+- `/api/chat` giữ `async def`, nhưng phần tải catalog đồng bộ được chuyển qua
+  `asyncio.to_thread`; Gemini dùng async SDK. Các route recommendation đồng bộ
+  dùng `def` để FastAPI chạy trong thread pool, nên không chặn `/health`.
+- Chat và CBF đọc `GET /api/internal/chatbot/products`; chat chỉ lấy page 0 với
+  tối đa `SOPE_CHATBOT_MAX_PRODUCTS_FOR_PROMPT=15`, còn CBF phân trang với
+  page size 15 và giới hạn page/product.
+- Cache CBF giữ normalized products, vectorizer, sparse TF-IDF, ánh xạ ID,
+  TTL và trạng thái build. `threading.Condition` thực hiện single-flight để
+  request đồng thời chờ cùng một lần build, không dựng ma trận trùng lặp.
+- Timeout HTTP tập trung ở `timeout_config.py`; `requests` dùng tuple connect/read,
+  `httpx` cấu hình connect/read/write/pool. Catalog timeout trả list rỗng hoặc
+  cache cũ và các route recommendation vẫn trả JSON có `product_ids`.
+- Biến deploy liên quan: `SOPE_CONNECT_TIMEOUT`, `SOPE_API_TIMEOUT`,
+  `SOPE_RECOMMENDATION_PAGE_SIZE`, `SOPE_RECOMMENDATION_MAX_PAGES`,
+  `SOPE_RECOMMENDATION_MAX_PRODUCTS`, `CBF_CACHE_TTL_SECONDS`,
+  `SOPE_PRODUCTS_CACHE_TTL_SECONDS`, `SOPE_CHATBOT_MAX_PRODUCTS_FOR_PROMPT`.
+- Test mới trong `test_concurrency_timeout.py` mock toàn bộ network/Gemini và
+  kiểm tra cache hit, single-flight, fallback, schema, hai chat liên tiếp,
+  health/chat trong lúc CBF build và catalog/spec nhẹ. Chạy cùng
+  `test_timeout.py`: 14 test pass.
+
 ## Cập nhật 2026-07-23 – Chuẩn bị deploy chatbot
 
 - `Dockerfile` chuyển sang Python 3.12 slim, chạy non-root, chỉ copy source cần thiết và có healthcheck `/health`; `.dockerignore` mới loại `.env`, cache và test khỏi image.

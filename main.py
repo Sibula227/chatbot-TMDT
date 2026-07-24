@@ -1,3 +1,6 @@
+import asyncio
+import logging
+
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -31,6 +34,7 @@ from timeout_config import (
 )
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
 # ==========================================
 # 0. KHAI BÁO CÁC PYDANTIC MODELS
@@ -260,7 +264,7 @@ def format_order_reply(order: Dict[str, Any]) -> str:
 
 
 BACKEND_API_BASE_URL = os.getenv("SOPE_BACKEND_API_URL", "http://localhost:8080/api").rstrip("/")
-PRODUCTS_ENDPOINT = f"{BACKEND_API_BASE_URL}/products"
+PRODUCTS_ENDPOINT = f"{BACKEND_API_BASE_URL}/internal/chatbot/products"
 
 
 def get_int_env(name: str, default: int) -> int:
@@ -420,8 +424,19 @@ def load_products_from_backend(force_refresh: bool = False) -> List[Dict[str, An
     now = time.time()
     cached_products = _product_cache.get("products") or []
     if not force_refresh and cached_products and now < float(_product_cache.get("expires_at", 0)):
+        logger.info(
+            "event=chat_catalog_cache status=hit products=%d",
+            len(cached_products),
+        )
         return cached_products
 
+    logger.info("event=chat_catalog_cache status=miss")
+    started_at = time.monotonic()
+    service_key = os.getenv("SOPE_SERVICE_KEY", "")
+    headers = {
+        "Accept": "application/json",
+        **({"X-Service-Key": service_key} if service_key else {}),
+    }
     all_products = []
     try:
         response = requests.get(
@@ -432,6 +447,7 @@ def load_products_from_backend(force_refresh: bool = False) -> List[Dict[str, An
                 "sortBy": "id",
                 "sortDir": "asc",
             },
+            headers=headers,
             timeout=requests_timeout_tuple(),
         )
 
@@ -448,20 +464,30 @@ def load_products_from_backend(force_refresh: bool = False) -> List[Dict[str, An
             _product_cache["expires_at"] = (
                 now + PRODUCTS_CACHE_TTL_SECONDS
             )
+            logger.info(
+                "event=chat_catalog_fetch status=success products=%d elapsed_ms=%d",
+                len(all_products),
+                int((time.monotonic() - started_at) * 1000),
+            )
             return all_products
 
-        print("[products] Backend trả về danh sách sản phẩm rỗng.")
-
-    except requests.exceptions.ConnectTimeout as exc:
-        print(
-            "[products] ConnectTimeout khi kết nối Spring Boot. "
-            f"connect_timeout={SOPE_CONNECT_TIMEOUT}s, error={exc}"
+        logger.warning(
+            "event=chat_catalog_fetch status=empty elapsed_ms=%d",
+            int((time.monotonic() - started_at) * 1000),
         )
 
-    except requests.exceptions.ReadTimeout as exc:
-        print(
-            "[products] ReadTimeout khi chờ dữ liệu sản phẩm. "
-            f"read_timeout={SOPE_API_TIMEOUT}s, error={exc}"
+    except requests.exceptions.ConnectTimeout:
+        logger.warning(
+            "event=chat_catalog_fetch status=connect_timeout timeout_seconds=%s elapsed_ms=%d",
+            SOPE_CONNECT_TIMEOUT,
+            int((time.monotonic() - started_at) * 1000),
+        )
+
+    except requests.exceptions.ReadTimeout:
+        logger.warning(
+            "event=chat_catalog_fetch status=read_timeout timeout_seconds=%s elapsed_ms=%d",
+            SOPE_API_TIMEOUT,
+            int((time.monotonic() - started_at) * 1000),
         )
 
     except requests.exceptions.HTTPError as exc:
@@ -470,21 +496,23 @@ def load_products_from_backend(force_refresh: bool = False) -> List[Dict[str, An
             if exc.response is not None
             else "unknown"
         )
-        print(
-            "[products] Spring Boot trả lỗi HTTP khi lấy sản phẩm. "
-            f"status={status_code}"
+        logger.warning(
+            "event=chat_catalog_fetch status=http_error http_status=%s elapsed_ms=%d",
+            status_code,
+            int((time.monotonic() - started_at) * 1000),
         )
 
-    except ValueError as exc:
-        print(
-            "[products] Backend trả dữ liệu JSON không hợp lệ. "
-            f"error={exc}"
+    except ValueError:
+        logger.warning(
+            "event=chat_catalog_fetch status=invalid_json elapsed_ms=%d",
+            int((time.monotonic() - started_at) * 1000),
         )
 
     except requests.exceptions.RequestException as exc:
-        print(
-            "[products] Lỗi kết nối tới Spring Boot khi lấy sản phẩm. "
-            f"type={type(exc).__name__}, error={exc}"
+        logger.warning(
+            "event=chat_catalog_fetch status=network_error error_type=%s elapsed_ms=%d",
+            type(exc).__name__,
+            int((time.monotonic() - started_at) * 1000),
         )
 
     return cached_products
@@ -646,6 +674,27 @@ def find_spec_value(specs: Any, terms: tuple[str, ...]) -> Optional[str]:
     return None
 
 
+def product_specification_text(product: Dict[str, Any]) -> str:
+    specs_text = specs_to_text(product.get("specs"), limit=None)
+    if specs_text:
+        return specs_text
+    return str(product.get("specificationSummary") or "")
+
+
+def find_product_spec_value(
+    product: Dict[str, Any],
+    terms: tuple[str, ...],
+) -> Optional[str]:
+    value = find_spec_value(product.get("specs"), terms)
+    if value:
+        return value
+    for entry in re.split(r"[;\n]+", product_specification_text(product)):
+        key, separator, candidate = entry.partition(":")
+        if separator and spec_contains_terms(key, candidate, terms):
+            return candidate.strip() or None
+    return None
+
+
 def product_matches_category(product: Dict[str, Any], categories: List[str]) -> bool:
     if not categories:
         return True
@@ -690,7 +739,7 @@ def score_product(product: Dict[str, Any], tokens: List[str]) -> int:
     brand_text = normalize_text(product.get("brand"))
     category_text = normalize_text(product.get("category"))
     short_text = normalize_text(product.get("shortDescription"))
-    specs_text = normalize_text(specs_to_text(product.get("specs"), limit=None))
+    specs_text = normalize_text(product_specification_text(product))
 
     score = 0
     for token in tokens:
@@ -769,7 +818,7 @@ def select_relevant_products(
 
 
 def product_to_prompt_item(product: Dict[str, Any]) -> Dict[str, Any]:
-    specs = product.get("specs")
+    specification_text = product_specification_text(product)
     return {
         "ID": str(product.get("id", "")),
         "SKU": str(product.get("sku", "")),
@@ -779,9 +828,9 @@ def product_to_prompt_item(product: Dict[str, Any]) -> Dict[str, Any]:
         "Giá": product.get("price"),
         "Giá cũ": product.get("oldPrice"),
         "Mô tả": compact_text(product.get("shortDescription"), 180),
-        "Chip xử lý": find_spec_value(specs, CPU_SPEC_TERMS),
-        "Chip đồ họa": find_spec_value(specs, GPU_SPEC_TERMS),
-        "Cấu hình": compact_text(specs_to_text(specs, limit=14), 900),
+        "Chip xử lý": find_product_spec_value(product, CPU_SPEC_TERMS),
+        "Chip đồ họa": find_product_spec_value(product, GPU_SPEC_TERMS),
+        "Cấu hình": compact_text(specification_text, 900),
     }
 
 # ==========================================
@@ -835,6 +884,7 @@ async def save_chat_to_springboot(user_id: str, user_message: str, bot_reply: st
 # ==========================================
 @app.post("/api/chat")
 async def chat_with_gemini(request: ChatRequest, background_tasks: BackgroundTasks):
+    started_at = time.monotonic()
     try:
         if not api_key:
             raise HTTPException(status_code=503, detail="Chua cau hinh GEMINI_API_KEY.")
@@ -881,7 +931,7 @@ async def chat_with_gemini(request: ChatRequest, background_tasks: BackgroundTas
 
         product_catalog_str = "[]"
         if is_product_question(user_msg):
-            backend_products = load_products_from_backend()
+            backend_products = await asyncio.to_thread(load_products_from_backend)
             if not backend_products:
                 bot_reply = "Mình chưa lấy được dữ liệu sản phẩm từ backend SOPE, nên chưa thể tư vấn sản phẩm lúc này."
                 background_tasks.add_task(
@@ -912,7 +962,7 @@ async def chat_with_gemini(request: ChatRequest, background_tasks: BackgroundTas
 
             CHÍNH SÁCH SOPE (F05 – lấy từ policy.json): {context or "Không có thông tin chính sách liên quan."}
 
-            SẢN PHẨM (lấy từ backend /api/products, đã lọc): {product_catalog_str}
+            SẢN PHẨM (lấy từ backend /api/internal/chatbot/products, đã lọc): {product_catalog_str}
 
             QUY TẮC TRẢ LỜI:
             - Xưng hô thân thiện, nhiệt tình.
@@ -953,8 +1003,16 @@ async def chat_with_gemini(request: ChatRequest, background_tasks: BackgroundTas
     except HTTPException:
         raise
     except Exception as exc:
-        print(f"Gemini request failed: {type(exc).__name__}")
+        logger.warning(
+            "event=chat_request status=error error_type=%s",
+            type(exc).__name__,
+        )
         raise HTTPException(status_code=500, detail="Đã xảy ra lỗi kết nối với Gemini API.")
+    finally:
+        logger.info(
+            "event=chat_request status=complete elapsed_ms=%d",
+            int((time.monotonic() - started_at) * 1000),
+        )
 
 # ==========================================
 # 5. CÁC ENDPOINT RECOMMENDATION

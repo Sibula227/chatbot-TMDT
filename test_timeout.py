@@ -21,7 +21,12 @@ class TimeoutConfigTests(unittest.TestCase):
     def test_defaults(self):
         cfg = self.reload_module("timeout_config")
         self.assertEqual(cfg.SOPE_CONNECT_TIMEOUT, 5.0)
-        self.assertEqual(cfg.SOPE_API_TIMEOUT, 20.0)
+        self.assertEqual(cfg.SOPE_API_TIMEOUT, 30.0)
+        timeout = cfg.httpx_timeout()
+        self.assertEqual(timeout.connect, 5.0)
+        self.assertEqual(timeout.read, 30.0)
+        self.assertEqual(timeout.write, 30.0)
+        self.assertEqual(timeout.pool, 5.0)
 
     def test_env_override_valid(self):
         os.environ["SOPE_CONNECT_TIMEOUT"] = "3"
@@ -35,7 +40,7 @@ class TimeoutConfigTests(unittest.TestCase):
         os.environ["SOPE_API_TIMEOUT"] = "-5"
         cfg = self.reload_module("timeout_config")
         self.assertEqual(cfg.SOPE_CONNECT_TIMEOUT, 5.0)
-        self.assertEqual(cfg.SOPE_API_TIMEOUT, 20.0)
+        self.assertEqual(cfg.SOPE_API_TIMEOUT, 30.0)
 
 
 class RecommendationRequestTests(unittest.TestCase):
@@ -69,6 +74,8 @@ class RecommendationRequestTests(unittest.TestCase):
         args, kwargs = mock_get.call_args
         self.assertIn("timeout", kwargs)
         self.assertEqual(kwargs["timeout"], (self.tc.SOPE_CONNECT_TIMEOUT, self.tc.SOPE_API_TIMEOUT))
+        self.assertEqual(kwargs["params"]["size"], 15)
+        self.assertTrue(kwargs["headers"].get("Accept"))
 
 
 if __name__ == "__main__":

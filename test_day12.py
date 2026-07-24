@@ -7,6 +7,9 @@ Khong can backend dang chay de test E02 va F01.
 import sys
 import os
 from pathlib import Path
+from unittest.mock import patch
+
+import requests
 
 # Fix encoding cho terminal Windows
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -162,7 +165,11 @@ print("\n[TEST 5] fetch_all_products khi backend tat (E01 graceful)...")
 os.environ["SOPE_BACKEND_API_URL"] = "http://localhost:8080/api"
 os.environ["SOPE_API_TIMEOUT"] = "2"  # timeout ngan de test nhanh
 
-products = fetch_all_products()
+with patch(
+    "recommendation.requests.get",
+    side_effect=requests.exceptions.ConnectTimeout(),
+):
+    products = fetch_all_products()
 if isinstance(products, list):
     print(f"  [PASS] Tra ve list (len={len(products)}) - graceful fallback khi backend tat: OK")
 else:
@@ -172,7 +179,11 @@ else:
 # TEST 6: fetch_user_interactions khi backend khong chay (E01)
 # -------------------------------------------------------
 print("\n[TEST 6] fetch_user_interactions khi backend tat (E01 graceful)...")
-df = fetch_user_interactions()
+with patch(
+    "recommendation.requests.get",
+    side_effect=requests.exceptions.ConnectTimeout(),
+):
+    df = fetch_user_interactions()
 import pandas as pd
 if isinstance(df, pd.DataFrame):
     print(f"  [PASS] Tra ve DataFrame rong (shape={df.shape}) - graceful fallback: OK")
@@ -183,7 +194,11 @@ else:
 # TEST 7: get_recommendations cold start (E01 + CF fallback)
 # -------------------------------------------------------
 print("\n[TEST 7] get_recommendations cold start (E01 CF)...")
-recs = get_recommendations(user_id=99999, top_n=5)
+with patch(
+    "recommendation.requests.get",
+    side_effect=requests.exceptions.ConnectTimeout(),
+):
+    recs = get_recommendations(user_id=99999, top_n=5)
 if isinstance(recs, list) and len(recs) == 0:
     print(f"  [PASS] Cold start user tra list rong: OK")
 else:

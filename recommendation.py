@@ -16,6 +16,8 @@ Tasks:
 """
 
 import os
+import logging
+import threading
 import time
 import unicodedata
 import re
@@ -35,13 +37,25 @@ from timeout_config import (
 )
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
 # ============================================================
 # CẤU HÌNH API NỘI BỘ  (E01)
 # ============================================================
 _BACKEND_BASE = os.getenv("SOPE_BACKEND_API_URL", "http://localhost:8080/api").rstrip("/")
 _SERVICE_KEY = os.getenv("SOPE_SERVICE_KEY", "")          # khóa dịch vụ nội bộ
-_API_TIMEOUT = SOPE_API_TIMEOUT  # kept for backward compatibility in code; use requests_timeout_tuple() for requests
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    try:
+        return max(int(os.getenv(name, str(default))), 1)
+    except (TypeError, ValueError):
+        return default
+
+
+_RECOMMENDATION_PAGE_SIZE = _positive_int_env("SOPE_RECOMMENDATION_PAGE_SIZE", 15)
+_RECOMMENDATION_MAX_PAGES = _positive_int_env("SOPE_RECOMMENDATION_MAX_PAGES", 20)
+_RECOMMENDATION_MAX_PRODUCTS = _positive_int_env("SOPE_RECOMMENDATION_MAX_PRODUCTS", 300)
 
 def _service_headers() -> Dict[str, str]:
     """Tạo header với service key nếu được cấu hình."""
@@ -61,34 +75,62 @@ def fetch_all_products() -> List[Dict[str, Any]]:
     Trả về list rỗng nếu backend không phản hồi hoặc timeout.
     Không kết nối MySQL trực tiếp.
     """
-    url = f"{_BACKEND_BASE}/products"
+    url = f"{_BACKEND_BASE}/internal/chatbot/products"
     all_products: List[Dict[str, Any]] = []
     page = 0
-    while True:
+    started_at = time.monotonic()
+    while page < _RECOMMENDATION_MAX_PAGES and len(all_products) < _RECOMMENDATION_MAX_PRODUCTS:
+        page_started_at = time.monotonic()
         try:
             resp = requests.get(
                 url,
                 params={
                     "page": page,
-                    "size": 15,
+                    "size": _RECOMMENDATION_PAGE_SIZE,
                     "sortBy": "id",
                     "sortDir": "asc",
                 },
                 headers=_service_headers(),
                 timeout=requests_timeout_tuple(),
             )
-        except requests.exceptions.Timeout:
-            print(f"[recommendation] Timeout khi lấy sản phẩm trang {page}. connect={SOPE_CONNECT_TIMEOUT}s read={SOPE_API_TIMEOUT}s")
+        except requests.exceptions.Timeout as exc:
+            logger.warning(
+                "event=cbf_catalog_fetch status=timeout page=%d error_type=%s "
+                "connect_timeout_seconds=%s read_timeout_seconds=%s elapsed_ms=%d",
+                page,
+                type(exc).__name__,
+                SOPE_CONNECT_TIMEOUT,
+                SOPE_API_TIMEOUT,
+                int((time.monotonic() - started_at) * 1000),
+            )
             break
         except requests.exceptions.RequestException as exc:
-            print(f"[recommendation] Lỗi kết nối backend khi lấy sản phẩm: {exc}")
+            logger.warning(
+                "event=cbf_catalog_fetch status=network_error page=%d error_type=%s elapsed_ms=%d",
+                page,
+                type(exc).__name__,
+                int((time.monotonic() - started_at) * 1000),
+            )
             break
 
         if resp.status_code != 200:
-            print(f"[recommendation] Backend trả lỗi {resp.status_code} khi lấy sản phẩm.")
+            logger.warning(
+                "event=cbf_catalog_fetch status=http_error page=%d http_status=%d elapsed_ms=%d",
+                page,
+                resp.status_code,
+                int((time.monotonic() - started_at) * 1000),
+            )
             break
 
-        payload = resp.json()
+        try:
+            payload = resp.json()
+        except ValueError:
+            logger.warning(
+                "event=cbf_catalog_fetch status=invalid_json page=%d elapsed_ms=%d",
+                page,
+                int((time.monotonic() - started_at) * 1000),
+            )
+            break
         if isinstance(payload, dict):
             items = payload.get("content", [])
         elif isinstance(payload, list):
@@ -98,7 +140,17 @@ def fetch_all_products() -> List[Dict[str, Any]]:
 
         if not isinstance(items, list):
             break
-        all_products.extend(items)
+        remaining = _RECOMMENDATION_MAX_PRODUCTS - len(all_products)
+        all_products.extend(items[:remaining])
+        logger.info(
+            "event=cbf_catalog_page status=success page=%d page_size=%d "
+            "received_products=%d accumulated_products=%d elapsed_ms=%d",
+            page,
+            _RECOMMENDATION_PAGE_SIZE,
+            len(items),
+            len(all_products),
+            int((time.monotonic() - page_started_at) * 1000),
+        )
 
         if not isinstance(payload, dict) or payload.get("last", True):
             break
@@ -107,17 +159,23 @@ def fetch_all_products() -> List[Dict[str, Any]]:
         if page >= total_pages:
             break
 
+    logger.info(
+        "event=cbf_catalog_fetch status=complete products=%d pages=%d elapsed_ms=%d",
+        len(all_products),
+        page + (1 if all_products else 0),
+        int((time.monotonic() - started_at) * 1000),
+    )
     return all_products
 
 
 def fetch_user_interactions() -> pd.DataFrame:
     """
     Lấy dữ liệu tương tác người dùng – sản phẩm từ backend API.
-    Endpoint mong đợi: GET /api/reviews
+    Endpoint: GET /api/ratings
     Trả về DataFrame với cột [user_id, product_id, rating].
     Trả DataFrame rỗng nếu backend không có hoặc lỗi.
     """
-    url = f"{_BACKEND_BASE}/reviews"
+    url = f"{_BACKEND_BASE}/ratings"
     all_rows: List[Dict[str, Any]] = []
     page = 0
     while True:
@@ -136,7 +194,7 @@ def fetch_user_interactions() -> pd.DataFrame:
             break
 
         if resp.status_code == 404:
-            print("[recommendation] Endpoint /api/reviews chưa có; CF sẽ trả rỗng.")
+            logger.warning("event=ratings_fetch status=not_found")
             break
         if resp.status_code != 200:
             print(f"[recommendation] Backend trả lỗi {resp.status_code} khi lấy reviews.")
@@ -264,6 +322,12 @@ def build_product_description(product: Dict[str, Any]) -> str:
     specs_text = _normalize_spec_text(_specs_to_flat_text(product.get("specs")))
     if specs_text:
         parts.append(specs_text)
+    else:
+        specification_summary = _normalize_spec_text(
+            product.get("specificationSummary", "")
+        )
+        if specification_summary:
+            parts.append(specification_summary)
 
     # Mô tả ngắn
     short_desc = _normalize_spec_text(product.get("shortDescription", ""))
@@ -329,6 +393,7 @@ def filter_recommendable(
         available = p.get("available")
         active = p.get("active")
         is_selling = p.get("isSelling")
+        in_stock = p.get("inStock")
         if status and status not in ("", "active", "selling", "available", "published", "1"):
             continue  # ngưng bán, ẩn, draft...
         if available is not None and not available:
@@ -337,10 +402,12 @@ def filter_recommendable(
             continue
         if is_selling is not None and not is_selling:
             continue
+        if in_stock is not None and not in_stock:
+            continue
 
         # Kiểm tra còn hàng – ưu tiên field đầu tiên khác None
         stock = None
-        for stock_field in ("stockQuantity", "stock", "quantity"):
+        for stock_field in ("availableQuantity", "stockQuantity", "stock", "quantity"):
             val = p.get(stock_field)
             if val is not None:
                 stock = val
@@ -444,14 +511,22 @@ def get_similar_products(product_id: int, top_n: int = 5) -> List[int]:
 # Chỉ tính lại khi tập product_id thay đổi (danh mục cập nhật)
 # ============================================================
 
-_CBF_CACHE_TTL = int(os.getenv("SOPE_CBF_CACHE_TTL", "3600"))  # giây, mặc định 1h
+_CBF_CACHE_TTL = _positive_int_env("CBF_CACHE_TTL_SECONDS", 600)
 
 _cbf_cache: Dict[str, Any] = {
-    "matrix":      None,   # pd.DataFrame | None
-    "product_ids": None,   # frozenset[int] | None – khóa để kiểm tra thay đổi
-    "expires_at":  0.0,    # timestamp hết hạn
-    "raw_products": None,  # list sản phẩm gốc, dùng cho E04 filter
+    "normalized_products": None,
+    "vectorizer": None,
+    "tfidf_matrix": None,
+    "id_to_index": {},
+    "product_ids": None,
+    "expires_at": 0.0,
+    "raw_products": None,
+    "building": False,
+    # Kept as a compatibility marker for older diagnostics. The request path
+    # uses tfidf_matrix directly and does not materialize an O(n²) matrix.
+    "matrix": None,
 }
+_cbf_condition = threading.Condition(threading.Lock())
 
 
 def _cbf_cache_key(products: List[Dict[str, Any]]) -> frozenset:
@@ -459,81 +534,135 @@ def _cbf_cache_key(products: List[Dict[str, Any]]) -> frozenset:
     return frozenset(int(p["id"]) for p in products if p.get("id") is not None)
 
 
-def build_content_based_engine() -> pd.DataFrame:
-    """
-    Xây dựng ma trận tương đồng content-based.
-    [E01] Lấy danh sách sản phẩm từ backend API (không dùng MySQL).
-    [E02] Dùng build_product_description() để tạo "hồ sơ" sản phẩm.
-    [E03] Chuẩn hóa specs trước khi tính TF-IDF.
-    [E05] Kiểm tra cache: chỉ tính lại nếu danh mục sản phẩm thay đổi hoặc cache hết hạn.
-    """
-    products = fetch_all_products()
-    if not products:
-        print("[recommendation] CBF: Không lấy được sản phẩm từ backend.")
-        # Trả cache cũ nếu vẫn còn
-        if _cbf_cache["matrix"] is not None and not _cbf_cache["matrix"].empty:
-            print("[recommendation] CBF: Dùng lại cache cũ.")
-            return _cbf_cache["matrix"]
-        return pd.DataFrame()
+def _cache_has_engine() -> bool:
+    return (
+        _cbf_cache.get("tfidf_matrix") is not None
+        and bool(_cbf_cache.get("id_to_index"))
+    )
 
-    now = time.time()
-    current_key = _cbf_cache_key(products)
 
-    # E05: Trả cache nếu không có gì thay đổi và chưa hết hạn
-    if (
-        _cbf_cache["matrix"] is not None
-        and not _cbf_cache["matrix"].empty
-        and _cbf_cache["product_ids"] == current_key
-        and now < _cbf_cache["expires_at"]
-    ):
-        print(f"[recommendation] CBF: Dùng cache (còn {int(_cbf_cache['expires_at'] - now)}s).")
-        return _cbf_cache["matrix"]
+def _build_cbf_artifacts(products: List[Dict[str, Any]]) -> Dict[str, Any]:
+    normalized_products = [normalize_product_specs(product) for product in products]
+    profile_products: List[Dict[str, Any]] = []
+    descriptions: List[str] = []
+    id_to_index: Dict[int, int] = {}
 
-    print(f"[recommendation] CBF: Tính lại ma trận ({len(products)} sản phẩm)...")
-
-    # E03: Chuẩn hóa specs trước khi tạo profile
-    normalized_products = [normalize_product_specs(p) for p in products]
-
-    # Tạo profile mô tả cho từng sản phẩm (E02 + E03)
-    records = []
     for product in normalized_products:
-        pid = product.get("id")
-        if pid is None:
+        product_id = product.get("id")
+        if product_id is None:
             continue
-        description = build_product_description(product)
-        if description.strip():
-            records.append({"product_id": int(pid), "description": description})
+        description = build_product_description(product).strip()
+        if not description:
+            continue
+        numeric_id = int(product_id)
+        id_to_index[numeric_id] = len(descriptions)
+        profile_products.append(product)
+        descriptions.append(description)
 
-    if not records:
-        print("[recommendation] CBF: Không có sản phẩm nào có mô tả.")
-        return pd.DataFrame()
+    if not descriptions:
+        return {}
 
-    product_profiles = pd.DataFrame(records).set_index("product_id")
-    print(f"Số sản phẩm có profile: {len(product_profiles)}")
-
-    # TF-IDF vectorize
-    tfidf = TfidfVectorizer(
+    vectorizer = TfidfVectorizer(
         analyzer="word",
         ngram_range=(1, 2),
         min_df=1,
         sublinear_tf=True,
     )
-    tfidf_matrix = tfidf.fit_transform(product_profiles["description"])
-    cosine_sim = cosine_similarity(tfidf_matrix, tfidf_matrix)
-    cbf_similarity_df = pd.DataFrame(
-        cosine_sim,
-        index=product_profiles.index,
-        columns=product_profiles.index,
-    )
+    tfidf_matrix = vectorizer.fit_transform(descriptions)
+    return {
+        "normalized_products": profile_products,
+        "vectorizer": vectorizer,
+        "tfidf_matrix": tfidf_matrix,
+        "id_to_index": id_to_index,
+    }
 
-    # E05: Lưu vào cache
-    _cbf_cache["matrix"]       = cbf_similarity_df
-    _cbf_cache["product_ids"]  = current_key
-    _cbf_cache["expires_at"]   = now + _CBF_CACHE_TTL
-    _cbf_cache["raw_products"] = products  # dùng cho filter E04
-    print(f"[recommendation] CBF: Cache cập nhật (TTL={_CBF_CACHE_TTL}s).")
 
-    return cbf_similarity_df
+def _ensure_content_based_engine() -> bool:
+    """Build the CBF cache once while concurrent callers wait for that build."""
+    with _cbf_condition:
+        now = time.time()
+        if _cache_has_engine() and now < float(_cbf_cache.get("expires_at", 0)):
+            logger.info("event=cbf_cache status=hit")
+            return True
+
+        if _cbf_cache.get("building"):
+            logger.info("event=cbf_cache status=wait_for_builder")
+            while _cbf_cache.get("building"):
+                _cbf_condition.wait()
+            return _cache_has_engine()
+
+        logger.info("event=cbf_cache status=miss")
+        _cbf_cache["building"] = True
+
+    started_at = time.monotonic()
+    try:
+        products = fetch_all_products()
+        if not products:
+            logger.warning(
+                "event=cbf_build status=no_catalog elapsed_ms=%d stale_cache=%s",
+                int((time.monotonic() - started_at) * 1000),
+                _cache_has_engine(),
+            )
+            return _cache_has_engine()
+
+        artifacts = _build_cbf_artifacts(products)
+        if not artifacts:
+            logger.warning(
+                "event=cbf_build status=no_profiles products=%d elapsed_ms=%d",
+                len(products),
+                int((time.monotonic() - started_at) * 1000),
+            )
+            return _cache_has_engine()
+
+        with _cbf_condition:
+            _cbf_cache.update(artifacts)
+            _cbf_cache["product_ids"] = _cbf_cache_key(products)
+            _cbf_cache["raw_products"] = products
+            _cbf_cache["matrix"] = None
+            _cbf_cache["expires_at"] = time.time() + _CBF_CACHE_TTL
+
+        logger.info(
+            "event=cbf_build status=success products=%d profiles=%d ttl_seconds=%d elapsed_ms=%d",
+            len(products),
+            len(artifacts["id_to_index"]),
+            _CBF_CACHE_TTL,
+            int((time.monotonic() - started_at) * 1000),
+        )
+        return True
+    except Exception as exc:
+        logger.exception(
+            "event=cbf_build status=error error_type=%s elapsed_ms=%d",
+            type(exc).__name__,
+            int((time.monotonic() - started_at) * 1000),
+        )
+        return _cache_has_engine()
+    finally:
+        with _cbf_condition:
+            _cbf_cache["building"] = False
+            _cbf_condition.notify_all()
+
+
+def build_content_based_engine() -> pd.DataFrame:
+    """Compatibility helper for diagnostics; request handling uses sparse TF-IDF."""
+    if not _ensure_content_based_engine():
+        return pd.DataFrame()
+
+    with _cbf_condition:
+        cached = _cbf_cache.get("matrix")
+        if isinstance(cached, pd.DataFrame) and not cached.empty:
+            return cached
+        tfidf_matrix = _cbf_cache["tfidf_matrix"]
+        id_to_index = dict(_cbf_cache["id_to_index"])
+
+    ordered_ids = [
+        product_id
+        for product_id, _index in sorted(id_to_index.items(), key=lambda item: item[1])
+    ]
+    similarities = cosine_similarity(tfidf_matrix, tfidf_matrix)
+    result = pd.DataFrame(similarities, index=ordered_ids, columns=ordered_ids)
+    with _cbf_condition:
+        _cbf_cache["matrix"] = result
+    return result
 
 
 def invalidate_cbf_cache() -> None:
@@ -541,9 +670,20 @@ def invalidate_cbf_cache() -> None:
     E05: Buộc tính lại ma trận lần tiếp theo
     (gọi khi backend thông báo danh mục đã thay đổi).
     """
-    _cbf_cache["product_ids"] = None
-    _cbf_cache["expires_at"]  = 0.0
-    print("[recommendation] CBF cache đã bị xóa, sẽ tính lại lần sau.")
+    with _cbf_condition:
+        _cbf_cache.update(
+            {
+                "normalized_products": None,
+                "vectorizer": None,
+                "tfidf_matrix": None,
+                "id_to_index": {},
+                "product_ids": None,
+                "expires_at": 0.0,
+                "raw_products": None,
+                "matrix": None,
+            }
+        )
+    logger.info("event=cbf_cache status=invalidated")
 
 
 def get_content_based_similar_products(
@@ -556,22 +696,33 @@ def get_content_based_similar_products(
     [E05] Dùng cache matrix, không tính lại nếu danh mục chưa đổi.
     [E04] Lọc kết quả: cùng loại, đang bán, còn hàng.
     """
-    cbf_similarity_df = build_content_based_engine()
-
-    if cbf_similarity_df.empty:
-        print("[recommendation] CBF: Ma trận rỗng, không thể gợi ý.")
+    if not _ensure_content_based_engine():
+        logger.warning("event=cbf_recommend status=engine_unavailable product_id=%d", product_id)
         return []
 
-    if product_id not in cbf_similarity_df.columns:
-        print(f"[recommendation] CBF: Không có product_id={product_id} trong ma trận.")
+    with _cbf_condition:
+        id_to_index = dict(_cbf_cache["id_to_index"])
+        tfidf_matrix = _cbf_cache["tfidf_matrix"]
+        cached_products = list(_cbf_cache.get("raw_products") or [])
+
+    product_index = id_to_index.get(product_id)
+    if product_index is None:
+        logger.info("event=cbf_recommend status=product_missing product_id=%d", product_id)
         return []
 
-    # Lấy các ứng viên (bỏ chính sản phẩm)
-    similar_items = cbf_similarity_df[product_id].sort_values(ascending=False)
-    candidate_ids = similar_items.iloc[1:].index.tolist()
+    similarity_scores = cosine_similarity(
+        tfidf_matrix[product_index],
+        tfidf_matrix,
+    ).ravel()
+    index_to_id = {index: candidate_id for candidate_id, index in id_to_index.items()}
+    candidate_ids = [
+        index_to_id[index]
+        for index in np.argsort(similarity_scores)[::-1]
+        if index_to_id[index] != product_id
+    ]
 
     # Dùng raw_products từ cache nếu có, hoặc products_ref từ caller
-    ref = products_ref or _cbf_cache.get("raw_products") or []
+    ref = products_ref or cached_products
 
     if ref:
         current_category: Optional[str] = None
@@ -591,7 +742,11 @@ def get_content_based_similar_products(
         safe_n = min(top_n, _MAX_RECOMMENDATIONS)
         recommendations = [cid for cid in candidate_ids if cid != product_id][:safe_n]
 
-    print(f"[recommendation] CBF top-{top_n} (E04+E05): {recommendations}")
+    logger.info(
+        "event=cbf_recommend status=success product_id=%d result_count=%d",
+        product_id,
+        len(recommendations),
+    )
     return recommendations
 
 
@@ -698,14 +853,10 @@ _E08_SEEN_PENALTY = float(os.getenv("SOPE_E08_SEEN_PENALTY",  "0.5"))  # hệ s�
 def _fetch_user_history(user_id: Any) -> List[Dict[str, Any]]:
     """
     E08: Lấy lịch sử tương tác của một user cụ thể từ backend.
-    Endpoint: GET /api/reviews?userId=<user_id>
-    Fallback: GET /api/interactions?userId=<user_id>
+    Endpoint: GET /api/ratings; lọc user ở phía chatbot.
     Trả list dict [{product_id, rating, category, brand, price}]
     """
-    endpoints = [
-        f"{_BACKEND_BASE}/reviews",
-        f"{_BACKEND_BASE}/interactions",
-    ]
+    endpoints = [f"{_BACKEND_BASE}/ratings"]
     for url in endpoints:
         try:
             resp = requests.get(
