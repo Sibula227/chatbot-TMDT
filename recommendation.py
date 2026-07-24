@@ -28,6 +28,11 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from dotenv import load_dotenv
 from normalize_specs import normalize_product_specs  # E03
+from timeout_config import (
+    SOPE_CONNECT_TIMEOUT,
+    SOPE_API_TIMEOUT,
+    requests_timeout_tuple,
+)
 
 load_dotenv()
 
@@ -36,7 +41,7 @@ load_dotenv()
 # ============================================================
 _BACKEND_BASE = os.getenv("SOPE_BACKEND_API_URL", "http://localhost:8080/api").rstrip("/")
 _SERVICE_KEY = os.getenv("SOPE_SERVICE_KEY", "")          # khóa dịch vụ nội bộ
-_API_TIMEOUT = float(os.getenv("SOPE_API_TIMEOUT", "10"))  # giây
+_API_TIMEOUT = SOPE_API_TIMEOUT  # kept for backward compatibility in code; use requests_timeout_tuple() for requests
 
 def _service_headers() -> Dict[str, str]:
     """Tạo header với service key nếu được cấu hình."""
@@ -65,10 +70,10 @@ def fetch_all_products() -> List[Dict[str, Any]]:
                 url,
                 params={"page": page, "size": 100, "sortBy": "id", "sortDir": "asc"},
                 headers=_service_headers(),
-                timeout=_API_TIMEOUT,
+                timeout=requests_timeout_tuple(),
             )
         except requests.exceptions.Timeout:
-            print(f"[recommendation] Timeout khi lấy sản phẩm trang {page}.")
+            print(f"[recommendation] Timeout khi lấy sản phẩm trang {page}. connect={SOPE_CONNECT_TIMEOUT}s read={SOPE_API_TIMEOUT}s")
             break
         except requests.exceptions.RequestException as exc:
             print(f"[recommendation] Lỗi kết nối backend khi lấy sản phẩm: {exc}")
@@ -116,10 +121,10 @@ def fetch_user_interactions() -> pd.DataFrame:
                 url,
                 params={"page": page, "size": 200, "sortBy": "id", "sortDir": "asc"},
                 headers=_service_headers(),
-                timeout=_API_TIMEOUT,
+                timeout=requests_timeout_tuple(),
             )
         except requests.exceptions.Timeout:
-            print(f"[recommendation] Timeout khi lấy reviews trang {page}.")
+            print(f"[recommendation] Timeout khi lấy reviews trang {page}. connect={SOPE_CONNECT_TIMEOUT}s read={SOPE_API_TIMEOUT}s")
             break
         except requests.exceptions.RequestException as exc:
             print(f"[recommendation] Lỗi kết nối backend khi lấy reviews: {exc}")
@@ -702,7 +707,7 @@ def _fetch_user_history(user_id: Any) -> List[Dict[str, Any]]:
                 url,
                 params={"userId": user_id, "size": 200},
                 headers=_service_headers(),
-                timeout=_API_TIMEOUT,
+                timeout=requests_timeout_tuple(),
             )
         except requests.exceptions.RequestException as exc:
             print(f"[E08] Lỗi kết nối {url}: {exc}")

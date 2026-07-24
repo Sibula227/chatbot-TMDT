@@ -23,6 +23,13 @@ from recommendation import (
 )
 from normalize_specs import normalize_product_specs  # E03
 
+from timeout_config import (
+    SOPE_CONNECT_TIMEOUT,
+    SOPE_API_TIMEOUT,
+    requests_timeout_tuple,
+    httpx_timeout,
+)
+
 load_dotenv()
 
 # ==========================================
@@ -62,7 +69,7 @@ def _load_policy() -> Dict[str, Any]:
     # Ưu tiên 1: API chính sách từ backend (nếu được cấu hình)
     if _POLICY_API_URL:
         try:
-            resp = requests.get(_POLICY_API_URL, timeout=5.0)
+            resp = requests.get(_POLICY_API_URL, timeout=requests_timeout_tuple())
             if resp.status_code == 200:
                 return resp.json()
         except Exception as exc:
@@ -171,7 +178,7 @@ def extract_order_id(message: str) -> Optional[str]:
 async def fetch_order_from_backend(
     order_id: str,
     user_id: str,
-    timeout: float = 5.0,
+    timeout: Optional[float] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     F06: Gọi API backend để tra cứu đơn hàng.
@@ -185,7 +192,8 @@ async def fetch_order_from_backend(
         headers["X-Service-Key"] = svc_key
     try:
         async with httpx.AsyncClient() as client:
-            resp = await client.get(url, headers=headers, timeout=timeout)
+            to = httpx_timeout() if timeout is None else timeout
+            resp = await client.get(url, headers=headers, timeout=to)
     except Exception as exc:
         print(f"[order] Loi ket noi backend khi tra don {order_id}: {exc}")
         return None
@@ -421,7 +429,7 @@ def load_products_from_backend(force_refresh: bool = False) -> List[Dict[str, An
             response = requests.get(
                 PRODUCTS_ENDPOINT,
                 params={"page": page, "size": 100, "sortBy": "id", "sortDir": "asc"},
-                timeout=5.0,
+                timeout=requests_timeout_tuple(),
             )
             if response.status_code != 200:
                 print(f"Lỗi API Spring Boot khi lấy sản phẩm: {response.status_code}")
@@ -780,7 +788,7 @@ async def save_chat_to_springboot(user_id: str, user_message: str, bot_reply: st
                 SPRING_BOOT_API_URL,
                 json=payload,
                 headers=headers,
-                timeout=float(os.getenv("SOPE_API_TIMEOUT", "10")),
+                timeout=httpx_timeout(),
             )
             if response.status_code != 200:
                 print(f"Lỗi khi lưu về Spring Boot: HTTP {response.status_code}")
