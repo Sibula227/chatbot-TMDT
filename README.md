@@ -33,6 +33,19 @@ Các service production:
 | Spring Boot API | [https://sope-backend-wezh.onrender.com/](https://sope-backend-wezh.onrender.com/) |
 | FastAPI Chatbot | [https://chatbot-tmdt.onrender.com/](https://chatbot-tmdt.onrender.com/) |
 
+## Tài khoản admin mặc định
+
+Tài khoản admin được xác thực và quản lý bởi Spring Boot backend, không phải
+FastAPI chatbot:
+
+| Thông tin | Giá trị |
+|---|---|
+| Tên đăng nhập | `admin` |
+| Mật khẩu | `admin123` |
+
+Đây là credential local/demo. Production phải đổi `APP_ADMIN_PASSWORD` ở
+backend và không truyền tài khoản admin, JWT hoặc mật khẩu vào prompt Gemini.
+
 ## Cấu trúc dự án
 
 ```text

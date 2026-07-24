@@ -1,5 +1,12 @@
 # CONTEXT.md - Bộ nhớ riêng cho chatbot-TMDT
 
+## Cập nhật 2026-07-24 – Bổ sung tài khoản admin demo vào README
+
+- `README.md` đã ghi tài khoản admin mặc định: username `admin`, password `admin123`.
+- Xác thực admin do Spring Boot backend quản lý; chatbot FastAPI không tự quản lý tài khoản này.
+- Thông tin chỉ dành cho local/demo, phải đổi mật khẩu qua cấu hình backend khi triển khai production và không gửi mật khẩu, JWT hoặc thông tin đăng nhập vào prompt Gemini.
+- Thay đổi lần này chỉ cập nhật tài liệu, không thay đổi mã nguồn hay biến môi trường.
+
 ## Cập nhật 2026-07-24 – Bổ sung mô tả, cấu trúc và link production
 
 - `README.md` có thêm vai trò của AI service, cây file thực tế và bảng giải
