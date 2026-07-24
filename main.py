@@ -130,6 +130,10 @@ def sanitize_reply(text: str) -> str:
     text = re.sub(r"(Bearer\s+|sk-|AIza)[A-Za-z0-9\-_\.]{8,}", "[REDACTED]", text)
     # Che JWT
     text = re.sub(r"eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+", "[JWT_REDACTED]", text)
+    # F08+: Che địa chỉ email
+    text = re.sub(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", "[EMAIL_REDACTED]", text)
+    # F08+: Che số điện thoại VN (10 số bắt đầu 0, hoặc +84)
+    text = re.sub(r"(?<!\d)(\+84|0)(3[2-9]|5[6-9]|7[06-9]|8[0-9]|9[0-9])\d{7}(?!\d)", "[PHONE_REDACTED]", text)
     return text
 
 
