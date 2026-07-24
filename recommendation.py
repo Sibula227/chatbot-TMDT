@@ -70,7 +70,7 @@ def fetch_all_products() -> List[Dict[str, Any]]:
                 url,
                 params={
                     "page": page,
-                    "size": 50,
+                    "size": 15,
                     "sortBy": "id",
                     "sortDir": "asc",
                 },
