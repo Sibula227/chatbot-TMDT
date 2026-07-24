@@ -26,5 +26,10 @@
   "ho tro": {
     "keywords": ["ho tro", "lien he", "cskh", "cham soc khach hang", "hotline", "email ho tro"],
     "content": "CSKH SOPE hoạt động 8h–22h mỗi ngày. Hotline: 1800-xxxx (miễn phí). Email: support@sope.vn. Chat trực tiếp trên website."
+  },
+
+  "tai khoan": {
+    "keywords": ["tai khoan", "dang nhap", "dang ky", "quen mat khau", "doi mat khau", "xac thuc", "otp", "ma xac nhan", "thong tin tai khoan", "cap nhat tai khoan"],
+    "content": "Để đăng nhập hoặc đăng ký tài khoản SOPE, truy cập mục 'Tài khoản' trên website. Nếu quên mật khẩu, chọn 'Quên mật khẩu' và nhập email để nhận OTP. Thông tin tài khoản có thể cập nhật trong phần 'Hồ sơ cá nhân'. Mọi thắc mắc liên hệ CSKH qua Hotline 1800-xxxx."
   }
 }
