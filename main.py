@@ -424,33 +424,68 @@ def load_products_from_backend(force_refresh: bool = False) -> List[Dict[str, An
 
     all_products = []
     try:
-        page = 0
-        while True:
-            response = requests.get(
-                PRODUCTS_ENDPOINT,
-                params={"page": page, "size": 100, "sortBy": "id", "sortDir": "asc"},
-                timeout=requests_timeout_tuple(),
-            )
-            if response.status_code != 200:
-                print(f"Lỗi API Spring Boot khi lấy sản phẩm: {response.status_code}")
-                break
+        response = requests.get(
+            PRODUCTS_ENDPOINT,
+            params={
+                "page": 0,
+                "size": MAX_PRODUCTS_FOR_PROMPT,
+                "sortBy": "id",
+                "sortDir": "asc",
+            },
+            timeout=requests_timeout_tuple(),
+        )
 
-            payload = response.json()
-            all_products.extend(extract_product_list(payload))
+        response.raise_for_status()
 
-            if not isinstance(payload, dict):
-                break
-            total_pages = int(payload.get("totalPages") or page + 1)
-            if payload.get("last", True) or page + 1 >= total_pages:
-                break
-            page += 1
+        payload = response.json()
+        all_products = extract_product_list(payload)
+
+        # Chỉ giữ đúng số sản phẩm tối đa dùng cho prompt.
+        all_products = all_products[:MAX_PRODUCTS_FOR_PROMPT]
 
         if all_products:
             _product_cache["products"] = all_products
-            _product_cache["expires_at"] = now + PRODUCTS_CACHE_TTL_SECONDS
+            _product_cache["expires_at"] = (
+                now + PRODUCTS_CACHE_TTL_SECONDS
+            )
             return all_products
-    except Exception as e:
-        print(f"Lỗi kết nối tới Spring Boot khi lấy sản phẩm: {e}")
+
+        print("[products] Backend trả về danh sách sản phẩm rỗng.")
+
+    except requests.exceptions.ConnectTimeout as exc:
+        print(
+            "[products] ConnectTimeout khi kết nối Spring Boot. "
+            f"connect_timeout={SOPE_CONNECT_TIMEOUT}s, error={exc}"
+        )
+
+    except requests.exceptions.ReadTimeout as exc:
+        print(
+            "[products] ReadTimeout khi chờ dữ liệu sản phẩm. "
+            f"read_timeout={SOPE_API_TIMEOUT}s, error={exc}"
+        )
+
+    except requests.exceptions.HTTPError as exc:
+        status_code = (
+            exc.response.status_code
+            if exc.response is not None
+            else "unknown"
+        )
+        print(
+            "[products] Spring Boot trả lỗi HTTP khi lấy sản phẩm. "
+            f"status={status_code}"
+        )
+
+    except ValueError as exc:
+        print(
+            "[products] Backend trả dữ liệu JSON không hợp lệ. "
+            f"error={exc}"
+        )
+
+    except requests.exceptions.RequestException as exc:
+        print(
+            "[products] Lỗi kết nối tới Spring Boot khi lấy sản phẩm. "
+            f"type={type(exc).__name__}, error={exc}"
+        )
 
     return cached_products
 

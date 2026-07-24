@@ -68,7 +68,12 @@ def fetch_all_products() -> List[Dict[str, Any]]:
         try:
             resp = requests.get(
                 url,
-                params={"page": page, "size": 100, "sortBy": "id", "sortDir": "asc"},
+                params={
+                    "page": page,
+                    "size": 50,
+                    "sortBy": "id",
+                    "sortDir": "asc",
+                },
                 headers=_service_headers(),
                 timeout=requests_timeout_tuple(),
             )
