@@ -41,6 +41,12 @@ _MAX_MESSAGE_LENGTH = int(os.getenv("SOPE_MAX_MESSAGE_LENGTH", "2000"))
 # F08: giới hạn độ dài reply trả về
 _MAX_REPLY_LENGTH   = int(os.getenv("SOPE_MAX_REPLY_LENGTH",   "3000"))
 
+# F09: Rate limiting – giới hạn số request mỗi user trong 1 cửa sổ thời gian
+_RATE_LIMIT_MAX_REQUESTS = int(os.getenv("SOPE_RATE_LIMIT_MAX_REQUESTS", "30"))  # request/phút
+_RATE_LIMIT_WINDOW_SEC   = int(os.getenv("SOPE_RATE_LIMIT_WINDOW_SEC",   "60"))  # cửa sổ (giây)
+# Lưu trạng thái: {user_id: {"count": int, "window_start": float}}
+_rate_limit_store: Dict[str, Any] = {}
+
 # ==========================================
 # 1. CHÍNH SÁCH – F05: Load từ policy.json, không hard-code
 # ==========================================
