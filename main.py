@@ -259,6 +259,11 @@ PRODUCT_INTENT_TERMS = (
     "xiaomi",
     "vivo",
     "realme",
+    "asus",           # F04+: Asus ROG / ZenFone
+    "lenovo",         # F04+: Lenovo tablet / laptop
+    "honor",          # F04+: Honor phone
+    "oneplus",        # F04+: OnePlus phone
+    "nothing phone",  # F04+: Nothing Phone
     "laptop",
     "macbook",
     "may tinh xach tay",
@@ -278,6 +283,10 @@ PRODUCT_INTENT_TERMS = (
     "ram",
     "pin",
     "man hinh",
+    "tai nghe",         # F04+: phụ kiện tai nghe
+    "sac",              # F04+: sạc / cáp sạc
+    "cap sac",          # F04+: cáp sạc
+    "phu kien",         # F04+: phụ kiện chung
 )
 
 # F04: Category aliases – bổ sung Samsung tablet
