@@ -93,6 +93,22 @@ _REFRESH_RATE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Camera: chuẩn hóa thành "XMP"
+_CAMERA_PATTERN = re.compile(
+    r"(\d+(?:[.,]\d+)?)\s*(?:mp|megapixel|mega pixel)",
+    re.IGNORECASE,
+)
+
+# Trọng lượng: chuẩn hóa thành "Xg" hoặc "Xkg"
+_WEIGHT_G_PATTERN = re.compile(
+    r"(\d+(?:[.,]\d+)?)\s*(?:gram|g\b)(?!\s*ram|\s*b)",
+    re.IGNORECASE,
+)
+_WEIGHT_KG_PATTERN = re.compile(
+    r"(\d+(?:[.,]\d+)?)\s*(?:kg|kilogram)",
+    re.IGNORECASE,
+)
+
 
 # ============================================================
 # HÀM TIỆN ÍCH
@@ -197,6 +213,38 @@ def normalize_screen(value: Any) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def normalize_camera(value: Any) -> str:
+    """
+    Chuẩn hóa độ phân giải camera.
+    Ví dụ: '50 MP' → '50mp', '12.2 Megapixel' → '12mp'
+    """
+    text = _base_normalize(value)
+    m = _CAMERA_PATTERN.search(text)
+    if m:
+        num = _normalize_number(m.group(1))
+        return f"{num}mp"
+    return text
+
+
+def normalize_weight(value: Any) -> str:
+    """
+    Chuẩn hóa trọng lượng thiết bị.
+    Ví dụ: '172 gram' → '172g', '1.5 kg' → '1.5kg'
+    """
+    text = _base_normalize(value)
+    # Ưu tiên kg
+    m = _WEIGHT_KG_PATTERN.search(text)
+    if m:
+        num = _normalize_number(m.group(1))
+        return f"{num}kg"
+    # Sau đó gram
+    m = _WEIGHT_G_PATTERN.search(text)
+    if m:
+        num = _normalize_number(m.group(1))
+        return f"{num}g"
+    return text
+
+
 # Tên key thường gặp cho từng loại thông số
 _RAM_KEYS = {"ram", "bo nho ram", "bo nho trong ram", "ram memory"}
 _STORAGE_KEYS = {
@@ -211,6 +259,13 @@ _BATTERY_KEYS = {"pin", "dung luong pin", "battery", "capacity"}
 _SCREEN_KEYS = {
     "man hinh", "kich thuoc man hinh", "display", "screen",
     "kich co man hinh",
+}
+_CAMERA_KEYS = {
+    "camera", "camera sau", "camera chinh", "do phan giai camera",
+    "camera truoc", "selfie", "rear camera", "front camera",
+}
+_WEIGHT_KEYS = {
+    "trong luong", "can nang", "weight", "kl", "khoi luong",
 }
 
 
@@ -227,6 +282,10 @@ def _key_type(raw_key: Any) -> Optional[str]:
         return "battery"
     if k in _SCREEN_KEYS:
         return "screen"
+    if k in _CAMERA_KEYS:
+        return "camera"
+    if k in _WEIGHT_KEYS:
+        return "weight"
     return None
 
 
@@ -258,6 +317,10 @@ def normalize_specs_dict(specs: Any) -> Dict[str, str]:
             result[raw_key] = normalize_battery(raw_val)
         elif spec_type == "screen":
             result[raw_key] = normalize_screen(raw_val)
+        elif spec_type == "camera":
+            result[raw_key] = normalize_camera(raw_val)
+        elif spec_type == "weight":
+            result[raw_key] = normalize_weight(raw_val)
         else:
             # Giữ nguyên, chỉ lowercase
             result[raw_key] = _base_normalize(raw_val)
