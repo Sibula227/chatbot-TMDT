@@ -211,13 +211,27 @@ def format_order_reply(order: Dict[str, Any]) -> str:
     items    = order.get("items") or order.get("orderItems") or []
     shipping = order.get("shippingStatus") or ""
     tracking = order.get("trackingCode") or order.get("trackingNumber") or ""
+
+    # F06+: Icon theo trạng thái đơn
+    _STATUS_ICONS: Dict[str, str] = {
+        "pending":    "⏳",
+        "confirmed":  "✅",
+        "processing": "🔧",
+        "shipping":   "🚚",
+        "delivered":  "📬",
+        "cancelled":  "❌",
+        "refunded":   "💸",
+    }
+    status_lower = status.lower().strip()
+    status_icon  = _STATUS_ICONS.get(status_lower, "📋")
+
     try:
         total_fmt = f"{int(total):,}đ"
     except (ValueError, TypeError):
         total_fmt = str(total)
     lines = [
         f"📦 **Đơn hàng #{order_id}**",
-        f"• Trạng thái: **{status}**",
+        f"• Trạng thái: {status_icon} **{status}**",
     ]
     if shipping:
         lines.append(f"• Giao hàng: {shipping}")
