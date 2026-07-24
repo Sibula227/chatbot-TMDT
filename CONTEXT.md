@@ -1,5 +1,24 @@
 # CONTEXT.md - Bộ nhớ riêng cho chatbot-TMDT
 
+## Cập nhật 2026-07-24 – Bổ sung mô tả, cấu trúc và link production
+
+- `README.md` có thêm vai trò của AI service, cây file thực tế và bảng giải
+  thích `main.py`, `recommendation.py`, normalize/timeout/policy/test.
+- Thêm bảng link production frontend, backend và chatbot; website chính là
+  `https://sope-frontend-self.vercel.app/`.
+- Chỉ cập nhật tài liệu, không đổi code, model, API hoặc dữ liệu.
+
+## Cập nhật 2026-07-24 – README hướng dẫn chạy dự án
+
+- Viết lại `README.md` bằng tiếng Việt theo cấu hình thực tế của FastAPI:
+  Python 3.12, tạo `.venv`, copy `.env.example`, chạy `main.py`, health/chat/CBF
+  smoke test, unit test, Docker và lỗi thường gặp.
+- Tài liệu dùng đúng biến mới `SOPE_CONNECT_TIMEOUT`,
+  `SOPE_RECOMMENDATION_PAGE_SIZE` và `CBF_CACHE_TTL_SECONDS`; bỏ tên cache/giá
+  trị timeout cũ.
+- Ghi rõ backend phải chạy trước, `SOPE_SERVICE_KEY` phải trùng
+  `CHATBOT_SECRET`, và không commit `.env` hay gọi chatbot trực tiếp từ frontend.
+
 ## Cập nhật 2026-07-24 – CBF concurrency, catalog nhẹ và timeout
 
 - `/api/chat` giữ `async def`, nhưng phần tải catalog đồng bộ được chuyển qua
