@@ -183,6 +183,41 @@ sanitized_normal = sanitize_reply(normal)
 s14 = "PASS" if sanitized_normal == normal else "FAIL"
 print(f"  [{s14}] Reply binh thuong giu nguyen: {sanitized_normal}")
 
+print("\n[TEST F08-5] sanitize_reply che email va so dien thoai...")
+text_pii = "Lien he user abc@example.com hoac so 0912345678 de duoc ho tro"
+sanitized_pii = sanitize_reply(text_pii)
+s15 = "PASS" if "[EMAIL_REDACTED]" in sanitized_pii and "[PHONE_REDACTED]" in sanitized_pii else "FAIL"
+print(f"  [{s15}] Che email + SDT: '{sanitized_pii}'")
+
+# -------------------------------------------------------
+# TEST E03+ - normalize_camera va normalize_weight
+# -------------------------------------------------------
+print("\n[TEST E03-camera] normalize_camera chuan hoa do phan giai camera...")
+from normalize_specs import normalize_camera, normalize_weight
+
+camera_cases = [
+    ("50 MP",          "50mp"),
+    ("12.2 Megapixel", "12mp"),
+    ("108MP",          "108mp"),
+    ("8 mega pixel",   "8mp"),
+]
+for raw, expected in camera_cases:
+    result = normalize_camera(raw)
+    status = "PASS" if result == expected else "FAIL"
+    print(f"  [{status}] '{raw}' -> '{result}' (expect '{expected}')")
+
+print("\n[TEST E03-weight] normalize_weight chuan hoa trong luong thiet bi...")
+weight_cases = [
+    ("172 gram",  "172g"),
+    ("195g",      "195g"),
+    ("1.5 kg",    "1.5kg"),
+    ("2 kilogram","2kg"),
+]
+for raw, expected in weight_cases:
+    result = normalize_weight(raw)
+    status = "PASS" if result == expected else "FAIL"
+    print(f"  [{status}] '{raw}' -> '{result}' (expect '{expected}')")
+
 # -------------------------------------------------------
 # TONG KET
 # -------------------------------------------------------
@@ -193,6 +228,7 @@ print("  E05 - Cache CBF matrix, chi tinh lai khi doi        [DONE]")
 print("  E06 - Cold start: goi y pho bien/danh gia cao       [DONE]")
 print("  F06 - Tra cuu don hang qua API backend              [DONE]")
 print("  F08 - Gioi han, chong injection, sanitize reply     [DONE]")
+print("  E03 - Chuan hoa camera (MP) va trong luong (g/kg)  [DONE]")
 print("=" * 60)
 print("\nBuoc tiep theo khi backend chay:")
 print("  GET  /api/ai/recommend/popular?top_n=5")
