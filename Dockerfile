@@ -13,7 +13,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN groupadd --system --gid 10001 sope \
     && useradd --system --uid 10001 --gid sope --home-dir /app --shell /usr/sbin/nologin sope
 
-COPY --chown=10001:10001 main.py recommendation.py normalize_specs.py policy.json ./
+COPY --chown=10001:10001 main.py recommendation.py normalize_specs.py timeout_config.py policy.json ./
 
 USER 10001:10001
 
